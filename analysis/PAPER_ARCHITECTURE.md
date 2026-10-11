@@ -84,4 +84,19 @@ From `src/menu/application-menu.ts`: New File `Cmd/Ctrl+N`, New Tab `Cmd+T`, Reo
 
 ## 9. REA static reconstruction
 
-See the appendix at the end of this file, which is filled in once the run completes.
+**Full asar run.** I ran `npx -y rea-agents@latest analyze-javascript-application ~/paper-target/app.asar --json --integrity-policy record-and-continue`. It parsed 3,927 of 4,736 files and then spent more than 20 minutes at 100% CPU and 2.6 GB RSS on `node_modules/typescript/lib/_tsc.js`, a 9 MB third-party bundle. I stopped it there. The progress log is in `analysis/raw/rea-analyze-js.err`.
+
+**Scoped run (completed in 65 s).** I copied Paper's own files (`package.json`, `src/`, `dist/`, `build.ts`, `tsconfig*`, `todesktop.json`) to `analysis/raw/app-own/` and ran `rea analyze-javascript-application analysis/raw/app-own --artifact-format directory --format json --full-output`. Raw output is in `analysis/raw/rea-own.json` (300 MB) and the summary in `rea-own-summary.txt`.
+
+| REA graph metric | Value | Consistent with |
+|---|---|---|
+| Electron main entrypoints | 1 (`dist/main.cjs`) | §2 |
+| Preloads | `dist/preload.cjs`, `dist/app-bar/preload.cjs` | §3 (tab content and app bar) |
+| `BrowserWindow` constructions | 2. Hidden PDF print window (`pdf-export.ts`) and Figma OAuth/auth window. Tabs use `WebContentsView`. | §2 |
+| Context-bridge APIs / exposed members | `paper` / 52 | §3 |
+| IPC literal channels / main handlers | 43 / 64 (150 operations, 0 dynamic channels) | §3. Adds `context-menu:show`, `fullscreen:state`, `tabs:state`. |
+| Native addon bindings, utility processes | 0 / 0 | No native renderer code ships in the desktop app. |
+| Endpoints | WorkOS auth/user-management, `/static/desktop/preloader.html`, `/www/desktop/sign-in.html`, `/file/<id>` | §1 (cloud auth and hosted UI) |
+| Files parsed / AST nodes / parse failures | 86 / 597,234 / 0 | |
+
+REA found no WebGL, WebGPU, WASM or canvas-engine modules, which is consistent with the editor being served remotely (§1).

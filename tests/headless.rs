@@ -663,3 +663,27 @@ fn app_full_ui_screenshot() {
         "canvas background {bg:?}"
     );
 }
+
+#[test]
+fn m6_svg_export_matches_gpu_render() {
+    let Some(g) = gpu() else { return };
+    let e = demo::showcase();
+    let gpu_img = png::render(g, &e.doc, None, 1.0, Some(Color::WHITE)).unwrap();
+    let s = svg::export(&e.doc, None, Some(Color::WHITE)).unwrap();
+    let tree = resvg::usvg::Tree::from_str(&s, &resvg::usvg::Options::default()).expect("valid SVG");
+    let (w, h) = gpu_img.dimensions();
+    assert_eq!((tree.size().width() as u32, tree.size().height() as u32), (w, h));
+    let mut pm = resvg::tiny_skia::Pixmap::new(w, h).unwrap();
+    resvg::render(&tree, resvg::tiny_skia::Transform::default(), &mut pm.as_mut());
+    let svg_img = image::RgbaImage::from_raw(w, h, pm.data().to_vec()).unwrap();
+    svg_img.save(shot("m6_export_svg_via_resvg.png")).unwrap();
+    // Allow anti-aliasing differences along edges, but no missing or miscolored content.
+    let differing = gpu_img
+        .pixels()
+        .zip(svg_img.pixels())
+        .filter(|(a, b)| (0..3).any(|c| (a.0[c] as i32 - b.0[c] as i32).abs() > 64))
+        .count();
+    let pct = differing as f64 / (w * h) as f64 * 100.0;
+    eprintln!("SVG vs GPU: {differing} px differ ({pct:.3}%)");
+    assert!(pct < 0.5, "SVG export diverges from the GPU render: {pct:.3}%");
+}

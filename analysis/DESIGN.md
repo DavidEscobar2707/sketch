@@ -68,7 +68,18 @@ main.rs         CLI: run app | --screenshot demo scenes
 
 ## Shortcuts
 
-`V` select · `H` hand (or hold `Space`) · `F`/`A` frame · `R` rectangle · `O` ellipse · `L` line · `T` text · `P` pencil (Paper's pen/draw) · `Esc` deselect, or finish text/tool · `Enter` edit text · `Delete`/`Backspace` delete · `Cmd+Z` / `Cmd+Shift+Z` (also `Cmd+Y`) undo/redo · `Cmd+A` select all · `Cmd+C/X/V` copy/cut/paste (internal clipboard, pasted with an offset) · `Cmd+D` duplicate · `Cmd+]` / `Cmd+[` forward/backward · `Cmd+Shift+]` / `[` to front/back · `Cmd+=` / `Cmd+-` / `Cmd+0` zoom in/out/100% · `Shift+1` fit all · `Shift+2` zoom to selection · `Shift+H` toggle visibility · `Cmd+Shift+L` toggle lock · arrows nudge · `Cmd+S` save · `Cmd+Shift+S` save as · `Cmd+O` open · `Cmd+N` new · `Cmd+Shift+E` export PNG · `Cmd+Alt+G` wrap selection in frame.
+The implemented keymap lives in `src/editor/shortcuts.rs`, and the README has the table. Changes from the plan:
+
+* Show/hide is `Cmd+Shift+H` and lock is `Cmd+Shift+L`, since a bare `Shift+H` would collide with typing.
+* An eraser tool (`E`) was added for sketching. `B` also selects the pencil.
+* `Cmd+Alt+E` exports SVG and `Cmd+'` toggles snapping.
+
+## Implementation notes (as built)
+
+* The rendering plan changed: everything is tessellated directly in **screen space** on the CPU, with tolerance 0.15 px, and drawn by one colored-triangle pipeline with 4x MSAA. There is no per-node mesh cache yet, but glyph meshes are cached once in font units. This removes camera-uniform precision issues at extreme zoom.
+* The canvas renders into the leftover egui region. Editor coordinates are canvas-local, and the painter applies the panel offset and a scissor.
+* PNG export tessellates at the export resolution (camera zoom = scale) and un-premultiplies anti-aliased edges for transparent output.
+* Top-level frames with children behave like canvas regions: body drag is a marquee and the label drag moves the frame. This follows design-tool artboard conventions.
 
 ## Rendering pipeline
 
