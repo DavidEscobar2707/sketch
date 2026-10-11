@@ -17,7 +17,7 @@ Sources:
   `ev_000b7b9d8afe2090cf862f477284a36934832a81e1735d4452ea35d6ac94e294` (main-process sources
   recovered from `app.asar`, subject sha256 `f49297c5…`) covers the eight `src/mcp/*` modules
   (server, bridge, index, body schema, self-capture hold, harness config, Claude extension,
-  spawn) and the `http://127.0.0.1:29979/mcp` endpoint. Re-running REA over the full 600 MB
+  spawn) and the `http://127.0.0.1:29979/mcp` endpoint. Re-running REA over the full 48 MB
   `app.asar` (with `node_modules`) timed out after 30 min on this host, so the narrower
   recovered tree is the cited evidence.
 * The tool catalogue. The desktop shell doesn't define tools: it asks the web client in the
