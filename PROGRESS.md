@@ -14,10 +14,36 @@ are credited in `THIRD_PARTY.md`.
 | Analysis notes | ✅ done | `analysis/FIGMA_NOTES.md`, `analysis/EXCALIDRAW_NOTES.md`, fixtures in `tests/fixtures/excalidraw/` |
 | P1: local projects, home screen, autosave, atomic writes, versioned format | ✅ done | `src/project/`, `src/session.rs`, `src/io/atomic.rs`, `tests/projects.rs::m1_*`, `milestone1_home.png`, `milestone1_trash.png` |
 | P2: multiple pages, infinite canvas per page | ✅ done | `src/editor/pages.rs`, `src/ui/pages.rs`, `tests/projects.rs::m2_*`, `milestone2_pages.png` |
-| P3: Figma core | ⏳ | |
+| P3: Figma core | ✅ done | `src/layout.rs`, `src/editor/{structure,vector_ops,text_edit}.rs`, `src/render/{draw,tess}.rs`, `src/ui/inspector.rs`, `tests/figma.rs`, `tests/perf.rs`, `milestone3_figma_core.png`, `milestone3_canvas.png` |
 | P4: Excalidraw core | ⏳ | |
 | P5: inspector, layers drag-reorder, command palette, shortcuts | ⏳ | |
 | P6: import/export (PNG/SVG/PDF, .excalidraw, SVG), cross-project paste | ⏳ | |
+
+### P3 notes
+
+* **Renderer rework.** Nodes become backend-neutral draw ops (fills with solid / linear /
+  radial / image paints, strokes, glyph runs) in `render/draw.rs`. The GPU path tessellates
+  them in world space and caches per node (keyed by content, world rect, inherited opacity and
+  zoom octave). Unchanged frames reuse the item list; the world vertex buffer is only
+  re-uploaded when the item list changes, so panning costs one uniform write. Gradients use a
+  ramp atlas; images are mipmapped textures; multiply/screen/darken/lighten have their own
+  blend pipelines (premultiplied output). The SVG exporter consumes the same ops.
+* **Model v3**: fill layers, blend, stroke align/dash/caps/joins, per-corner radii, rich text
+  spans, auto layout, layout-child sizing and constraints, component flag and instance links,
+  groups, vector paths, polygons, stars. Page format v3 with a v2→v3 migration (`fill` →
+  `fills`).
+* **Fixup pass** (`Editor::fixup`) runs inside every transaction: normalizes group bounds,
+  syncs instances of edited components (respecting per-property overrides recorded by the
+  inspector, text edits and drags), and re-runs auto layout from the outermost auto-layout
+  ancestor. It undoes together with the edit.
+* **Resize** restores the drag-start snapshot each move and re-applies constraints/group
+  scaling from it, so repeated resizes never drift.
+* **10k elements**: `tests/perf.rs` builds 10 000 nodes (rects, ellipses, stars, text), all in
+  view. Release: first frame ~140 ms (CPU tessellation of everything), cached frame ~3 ms,
+  editing one node re-tessellates one node, panning re-uploads nothing.
+* Deferred depth: rounded-corner frame clipping, live (non-destructive) booleans, on-canvas
+  gradient handles, rotation, variants, layout grids, min/max sizes, baseline alignment, and
+  exact GPU compositing for the remaining 11 blend modes and group opacity.
 
 ### P2 notes
 

@@ -24,7 +24,7 @@ lyon = "1"
 ttf-parser = "0.25"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
-image = { version = "0.25", default-features = false, features = ["png"] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 pollster = "0.4"
 bytemuck = { version = "1", features = ["derive"] }
 log = "0.4"
@@ -32,6 +32,7 @@ env_logger = "0.11"
 rfd = "0.17"
 fastrand = "2"
 dirs = "6"
+i_overlay = "9.0.1"
 
 [profile.release]
 debug = false

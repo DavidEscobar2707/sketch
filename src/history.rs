@@ -65,6 +65,14 @@ pub struct Recording {
 }
 
 impl Recording {
+    /// Nodes touched so far, in first-touch order.
+    pub fn touched(&self) -> &[NodeId] {
+        &self.order
+    }
+    /// The state of a touched node when the transaction began (None if it didn't exist).
+    pub fn before(&self, id: NodeId) -> Option<&Option<Node>> {
+        self.before.get(&id)
+    }
     pub fn new(label: impl Into<String>, doc: &Document) -> Recording {
         Recording {
             label: label.into(),

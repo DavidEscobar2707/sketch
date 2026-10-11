@@ -43,6 +43,7 @@ impl Session {
     /// Open a project folder into the editor.
     pub fn open(&mut self, ed: &mut Editor, dir: &Path) -> Result<(), FormatError> {
         let p = Project::open(dir)?;
+        crate::assets::load_dir(&dir.join(crate::project::ASSETS_DIR));
         let pages = p.load_pages()?;
         ed.open_pages(pages, p.manifest.active_page.as_deref());
         // Freshly loaded pages are saved by definition.
@@ -90,7 +91,13 @@ impl Session {
         ed.commit_pending();
         let dirty = ed.dirty_pages();
         for &i in &dirty {
-            p.save_page(&ed.page_data(i))?;
+            let data = ed.page_data(i);
+            // Images first, so a page never references a file that isn't there.
+            crate::assets::save_to_dir(
+                &p.dir.join(crate::project::ASSETS_DIR),
+                crate::assets::used_by(&data.doc),
+            )?;
+            p.save_page(&data)?;
             ed.mark_page_saved(i);
         }
         let pages: Vec<PageRef> = ed

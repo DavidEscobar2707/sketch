@@ -138,7 +138,7 @@ fn zoom_shortcuts() {
 #[test]
 fn pencil_draws_one_smoothed_stroke_per_gesture() {
     let mut e = ed();
-    press(&mut e, 'p');
+    press(&mut e, 'b');
     down(&mut e, 100.0, 100.0, 0.0);
     let mut seed = 7u64;
     for i in 1..=60 {
@@ -172,7 +172,7 @@ fn pencil_draws_one_smoothed_stroke_per_gesture() {
 fn stroke_width_is_screen_constant_when_zoomed() {
     let mut e = ed();
     e.camera.zoom = 4.0;
-    press(&mut e, 'p');
+    press(&mut e, 'b');
     drag(&mut e, (10.0, 10.0), (200.0, 50.0), 0.0);
     let n = e.doc.nodes.values().next().unwrap();
     let NodeKind::Stroke { width, .. } = n.kind else {
@@ -184,7 +184,7 @@ fn stroke_width_is_screen_constant_when_zoomed() {
 #[test]
 fn eraser_removes_touched_strokes_only() {
     let mut e = ed();
-    press(&mut e, 'p');
+    press(&mut e, 'b');
     drag(&mut e, (100.0, 100.0), (300.0, 100.0), 0.0);
     drag(&mut e, (100.0, 300.0), (300.0, 300.0), 1000.0);
     let rect = e.add_node(
@@ -561,7 +561,7 @@ fn undo_redo_round_trips_a_whole_session() {
     press(&mut e, 'r');
     drag(&mut e, (50.0, 50.0), (150.0, 150.0), 1000.0);
     snapshots.push(e.doc.clone());
-    press(&mut e, 'p');
+    press(&mut e, 'b');
     drag(&mut e, (200.0, 200.0), (300.0, 260.0), 2000.0);
     snapshots.push(e.doc.clone());
     // Esc: pencil -> select tool; Esc: rect -> parent frame; Cmd+A then selects top level.

@@ -2,6 +2,7 @@
 
 use super::Tool;
 use super::input::{Key, Modifiers};
+use super::vector_ops::BoolOp;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Action {
@@ -36,6 +37,22 @@ pub enum Action {
     ExportPng,
     ExportSvg,
     ToggleSnapping,
+    Group,
+    Ungroup,
+    CreateComponent,
+    DetachInstance,
+    AddAutoLayout,
+    RemoveAutoLayout,
+    /// Axis (0 = x, 1 = y) and target (0 start, 0.5 center, 1 end).
+    Align(u8, f64),
+    Distribute(u8),
+    Boolean(super::vector_ops::BoolOp),
+    Flatten,
+    Bold,
+    Italic,
+    Underline,
+    Strikethrough,
+    PlaceImage,
 }
 
 impl Action {
@@ -63,6 +80,9 @@ const SHIFT: Chord = c(false, true, false);
 const CMD: Chord = c(true, false, false);
 const CMD_SHIFT: Chord = c(true, true, false);
 const CMD_ALT: Chord = c(true, false, true);
+const ALT: Chord = c(false, false, true);
+const ALT_SHIFT: Chord = c(false, true, true);
+const CMD_ALT_SHIFT: Chord = c(true, true, true);
 
 /// Bindings: (key, chord, action, description shown in help).
 fn bindings() -> Vec<(Key, Chord, Action, &'static str)> {
@@ -82,12 +102,15 @@ fn bindings() -> Vec<(Key, Chord, Action, &'static str)> {
         (Char('o'), PLAIN, A::Tool(Tool::Ellipse), "Ellipse tool"),
         (Char('l'), PLAIN, A::Tool(Tool::Line), "Line tool"),
         (Char('t'), PLAIN, A::Tool(Tool::Text), "Text tool"),
+        (Char('p'), PLAIN, A::Tool(Tool::Pen), "Pen (vector path)"),
         (
             Char('p'),
-            PLAIN,
+            SHIFT,
             A::Tool(Tool::Pencil),
             "Pencil (freehand sketch)",
         ),
+        (Char('y'), SHIFT, A::Tool(Tool::Polygon), "Polygon tool"),
+        (Char('s'), SHIFT, A::Tool(Tool::Star), "Star tool"),
         (
             Char('b'),
             PLAIN,
@@ -148,7 +171,66 @@ fn bindings() -> Vec<(Key, Chord, Action, &'static str)> {
         (Char('s'), CMD, A::Save, "Save now"),
         (Char('s'), CMD_SHIFT, A::SaveAs, "Duplicate project"),
         (Char('e'), CMD_SHIFT, A::ExportPng, "Export PNG"),
-        (Char('e'), CMD_ALT, A::ExportSvg, "Export SVG"),
+        (Char('e'), CMD_ALT_SHIFT, A::ExportSvg, "Export SVG"),
+        (Char('g'), CMD, A::Group, "Group selection"),
+        (Char('g'), CMD_SHIFT, A::Ungroup, "Ungroup"),
+        (Char('k'), CMD_ALT, A::CreateComponent, "Create component"),
+        (Char('b'), CMD_ALT, A::DetachInstance, "Detach instance"),
+        (Char('a'), SHIFT, A::AddAutoLayout, "Add auto layout"),
+        (
+            Char('a'),
+            ALT_SHIFT,
+            A::RemoveAutoLayout,
+            "Remove auto layout",
+        ),
+        (Char('a'), ALT, A::Align(0, 0.0), "Align left"),
+        (Char('h'), ALT, A::Align(0, 0.5), "Align horizontal centers"),
+        (Char('d'), ALT, A::Align(0, 1.0), "Align right"),
+        (Char('w'), ALT, A::Align(1, 0.0), "Align top"),
+        (Char('v'), ALT, A::Align(1, 0.5), "Align vertical centers"),
+        (Char('s'), ALT, A::Align(1, 1.0), "Align bottom"),
+        (
+            Char('h'),
+            ALT_SHIFT,
+            A::Distribute(0),
+            "Distribute horizontal spacing",
+        ),
+        (
+            Char('v'),
+            ALT_SHIFT,
+            A::Distribute(1),
+            "Distribute vertical spacing",
+        ),
+        (
+            Char('u'),
+            ALT_SHIFT,
+            A::Boolean(BoolOp::Union),
+            "Union selection",
+        ),
+        (
+            Char('s'),
+            ALT_SHIFT,
+            A::Boolean(BoolOp::Subtract),
+            "Subtract selection",
+        ),
+        (
+            Char('i'),
+            ALT_SHIFT,
+            A::Boolean(BoolOp::Intersect),
+            "Intersect selection",
+        ),
+        (
+            Char('e'),
+            ALT_SHIFT,
+            A::Boolean(BoolOp::Exclude),
+            "Exclude selection",
+        ),
+        (Char('e'), CMD, A::Flatten, "Flatten to vector"),
+        (Char('b'), CMD, A::Bold, "Bold"),
+        (Char('i'), CMD, A::Italic, "Italic"),
+        (Char('u'), CMD, A::Underline, "Underline"),
+        (Char('x'), CMD_SHIFT, A::Strikethrough, "Strikethrough"),
+        (Char('k'), CMD_SHIFT, A::PlaceImage, "Place image…"),
         (Char('\''), CMD, A::ToggleSnapping, "Toggle snapping"),
     ]
 }

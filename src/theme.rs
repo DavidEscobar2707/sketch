@@ -318,6 +318,19 @@ pub enum Icon {
     Component,
     Instance,
     Image,
+    AlignLeft,
+    AlignHCenter,
+    AlignRight,
+    AlignTop,
+    AlignVCenter,
+    AlignBottom,
+    DistributeH,
+    DistributeV,
+    Corners,
+    Wrap,
+    ArrowRight,
+    ArrowDown,
+    SpaceBetween,
 }
 
 pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
@@ -550,6 +563,106 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color3
                 pt(13.5, 11.5),
             ]);
             painter.circle_stroke(pt(10.5, 5.8), 1.1 * u, st);
+        }
+        Icon::AlignLeft | Icon::AlignHCenter | Icon::AlignRight => {
+            let x = match icon {
+                Icon::AlignLeft => 2.5,
+                Icon::AlignHCenter => 8.0,
+                _ => 13.5,
+            };
+            line(&[pt(x, 1.5), pt(x, 14.5)]);
+            let bar = |y0: f32, w: f32| {
+                let (x0, x1) = match icon {
+                    Icon::AlignLeft => (4.0, 4.0 + w),
+                    Icon::AlignHCenter => (8.0 - w / 2.0, 8.0 + w / 2.0),
+                    _ => (12.0 - w, 12.0),
+                };
+                painter.rect_filled(
+                    Rect::from_min_max(pt(x0, y0), pt(x1, y0 + 3.0)),
+                    0.8 * u,
+                    color,
+                );
+            };
+            bar(4.0, 8.0);
+            bar(9.0, 5.0);
+        }
+        Icon::AlignTop | Icon::AlignVCenter | Icon::AlignBottom => {
+            let y = match icon {
+                Icon::AlignTop => 2.5,
+                Icon::AlignVCenter => 8.0,
+                _ => 13.5,
+            };
+            line(&[pt(1.5, y), pt(14.5, y)]);
+            let bar = |x0: f32, h: f32| {
+                let (y0, y1) = match icon {
+                    Icon::AlignTop => (4.0, 4.0 + h),
+                    Icon::AlignVCenter => (8.0 - h / 2.0, 8.0 + h / 2.0),
+                    _ => (12.0 - h, 12.0),
+                };
+                painter.rect_filled(
+                    Rect::from_min_max(pt(x0, y0), pt(x0 + 3.0, y1)),
+                    0.8 * u,
+                    color,
+                );
+            };
+            bar(4.0, 8.0);
+            bar(9.0, 5.0);
+        }
+        Icon::DistributeH => {
+            line(&[pt(2.0, 2.0), pt(2.0, 14.0)]);
+            line(&[pt(14.0, 2.0), pt(14.0, 14.0)]);
+            painter.rect_filled(
+                Rect::from_min_max(pt(6.5, 4.5), pt(9.5, 11.5)),
+                0.8 * u,
+                color,
+            );
+        }
+        Icon::DistributeV => {
+            line(&[pt(2.0, 2.0), pt(14.0, 2.0)]);
+            line(&[pt(2.0, 14.0), pt(14.0, 14.0)]);
+            painter.rect_filled(
+                Rect::from_min_max(pt(4.5, 6.5), pt(11.5, 9.5)),
+                0.8 * u,
+                color,
+            );
+        }
+        Icon::Corners => {
+            for (a, b, c2) in [
+                (pt(2.5, 6.0), pt(2.5, 2.5), pt(6.0, 2.5)),
+                (pt(10.0, 2.5), pt(13.5, 2.5), pt(13.5, 6.0)),
+                (pt(13.5, 10.0), pt(13.5, 13.5), pt(10.0, 13.5)),
+                (pt(6.0, 13.5), pt(2.5, 13.5), pt(2.5, 10.0)),
+            ] {
+                line(&[a, b, c2]);
+            }
+        }
+        Icon::Wrap => {
+            line(&[pt(2.0, 4.0), pt(12.0, 4.0)]);
+            let mut a = arc(
+                pt(12.0, 7.25),
+                3.25 * u,
+                -std::f32::consts::FRAC_PI_2,
+                std::f32::consts::FRAC_PI_2,
+                8,
+            );
+            a.push(pt(5.0, 10.5));
+            line(&a);
+            line(&[pt(7.0, 8.5), pt(5.0, 10.5), pt(7.0, 12.5)]);
+        }
+        Icon::ArrowRight => {
+            line(&[pt(2.5, 8.0), pt(13.0, 8.0)]);
+            line(&[pt(9.5, 4.5), pt(13.0, 8.0), pt(9.5, 11.5)]);
+        }
+        Icon::ArrowDown => {
+            line(&[pt(8.0, 2.5), pt(8.0, 13.0)]);
+            line(&[pt(4.5, 9.5), pt(8.0, 13.0), pt(11.5, 9.5)]);
+        }
+        Icon::SpaceBetween => {
+            line(&[pt(1.5, 3.0), pt(1.5, 13.0)]);
+            line(&[pt(14.5, 3.0), pt(14.5, 13.0)]);
+            line(&[pt(4.0, 8.0), pt(12.0, 8.0)]);
+            line(&[pt(6.0, 6.0), pt(4.0, 8.0), pt(6.0, 10.0)]);
+            line(&[pt(10.0, 6.0), pt(12.0, 8.0), pt(10.0, 10.0)]);
         }
         Icon::Grid => {
             for (x, y) in [(2.5, 2.5), (9.0, 2.5), (2.5, 9.0), (9.0, 9.0)] {

@@ -2,6 +2,7 @@
 //! projects home screen.
 
 pub mod home;
+pub mod inspector;
 pub mod pages;
 
 use crate::editor::shortcuts::{self, Action};
@@ -37,10 +38,10 @@ pub fn setup_style(ctx: &egui::Context) {
     theme::apply(ctx);
 }
 
-fn c32(c: Color) -> Color32 {
+pub(crate) fn c32(c: Color) -> Color32 {
     Color32::from_rgba_unmultiplied(c.r, c.g, c.b, c.a)
 }
-fn from32(c: Color32) -> Color {
+pub(crate) fn from32(c: Color32) -> Color {
     let [r, g, b, a] = c.to_srgba_unmultiplied();
     Color::rgba(r, g, b, a)
 }
@@ -54,7 +55,7 @@ pub(crate) fn section(ui: &mut Ui, title: &str) {
     );
 }
 
-fn title_text(text: impl Into<String>) -> RichText {
+pub(crate) fn title_text(text: impl Into<String>) -> RichText {
     RichText::new(text).font(theme::semibold(theme::BODY))
 }
 
@@ -110,7 +111,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
                 .fill(p.inspector)
                 .inner_margin(egui::Margin::symmetric(14, 10)),
         )
-        .show(ui, |ui| design(ui, ed, st));
+        .show(ui, |ui| inspector::panel(ui, ed, st));
     let canvas = ui.available_rect_before_wrap();
     toolbar(ui.ctx(), ed, canvas);
     status(ui.ctx(), ed, canvas);
@@ -537,259 +538,6 @@ fn layer_row(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, id: NodeId, depth: 
     }
 }
 
-/// Apply a property edit as a coalesced transaction keyed by field + selection.
-fn apply(ed: &mut Editor, field: &str, ids: &[NodeId], f: impl Fn(&mut crate::model::Node)) {
-    let key = format!("{field}:{ids:?}");
-    ed.edit_coalescing(&format!("Change {field}"), &key, |tx| {
-        for id in ids {
-            if let Some(n) = tx.node_mut(*id) {
-                f(n);
-            }
-        }
-    });
-    for id in ids {
-        ed.fit_text(*id);
-    }
-    ed.commit();
-}
-
-fn seal_on_release(ed: &mut Editor, r: &egui::Response) {
-    if r.drag_stopped() || r.lost_focus() {
-        ed.history.seal();
-    }
-}
-
-fn num(
-    ui: &mut Ui,
-    ed: &mut Editor,
-    label: &str,
-    value: f64,
-    speed: f64,
-    range: std::ops::RangeInclusive<f64>,
-) -> Option<f64> {
-    let mut v = value;
-    let r = ui
-        .horizontal(|ui| {
-            ui.label(RichText::new(label).weak());
-            ui.add(
-                egui::DragValue::new(&mut v)
-                    .speed(speed)
-                    .range(range)
-                    .max_decimals(2),
-            )
-        })
-        .inner;
-    seal_on_release(ed, &r);
-    (r.changed() && v != value).then_some(v)
-}
-
-fn color_row(ui: &mut Ui, ed: &mut Editor, label: &str, c: Option<Color>) -> Option<Option<Color>> {
-    let mut out = None;
-    ui.horizontal(|ui| {
-        let mut on = c.is_some();
-        if ui.checkbox(&mut on, label).changed() {
-            out = Some(if on {
-                Some(c.unwrap_or(Color::rgb(0xd9, 0xd9, 0xd9)))
-            } else {
-                None
-            });
-        }
-        if let Some(col) = c {
-            let mut c2 = c32(col);
-            let r = ui.color_edit_button_srgba(&mut c2);
-            if r.changed() {
-                out = Some(Some(from32(c2)));
-            }
-            ui.label(RichText::new(col.to_hex()).monospace().weak());
-            seal_on_release(ed, &r);
-        }
-    });
-    out
-}
-
-fn design(ui: &mut Ui, ed: &mut Editor, _st: &mut UiState) {
-    section(ui, "Design");
-    ui.add_space(2.0);
-    let ids = ed.top_selection();
-    if ids.is_empty() {
-        ui.label(title_text("Pencil"));
-        ui.horizontal(|ui| {
-            ui.label(RichText::new("Width").weak());
-            ui.add(egui::Slider::new(&mut ed.ink_width, 0.5..=24.0));
-        });
-        ui.horizontal(|ui| {
-            ui.label(RichText::new("Smoothing").weak());
-            ui.add(egui::Slider::new(&mut ed.ink_smoothing, 0.0..=1.0));
-        });
-        ui.horizontal(|ui| {
-            ui.label(RichText::new("Color").weak());
-            let mut c = c32(ed.ink_color);
-            if ui.color_edit_button_srgba(&mut c).changed() {
-                ed.ink_color = from32(c);
-            }
-        });
-        ui.separator();
-        ui.label(title_text("Page"));
-        let mut name = ed.page_name().to_string();
-        let r = ui.text_edit_singleline(&mut name);
-        if r.changed() {
-            let i = ed.active_page;
-            ed.rename_page(i, &name);
-        }
-        ui.label(format!("{} layers", ed.doc.nodes.len()));
-        return;
-    }
-    let first = ed.doc.get(ids[0]).cloned().unwrap();
-    if ids.len() > 1 {
-        ui.label(format!("{} layers selected", ids.len()));
-    } else {
-        ui.label(title_text(format!(
-            "{} · {}",
-            first.kind.type_name(),
-            first.name
-        )));
-    }
-    ui.separator();
-
-    // Geometry (single selection, coordinates relative to the parent frame).
-    if ids.len() == 1 {
-        let r = first.rect;
-        egui::Grid::new("geom").num_columns(2).show(ui, |ui| {
-            if let Some(v) = num(ui, ed, "X", r.x, 1.0, f64::MIN..=f64::MAX) {
-                apply(ed, "x", &ids, |n| n.rect.x = v);
-            }
-            if let Some(v) = num(ui, ed, "Y", r.y, 1.0, f64::MIN..=f64::MAX) {
-                apply(ed, "y", &ids, |n| n.rect.y = v);
-            }
-            ui.end_row();
-            if let Some(v) = num(ui, ed, "W", r.w, 1.0, 0.0..=1e6) {
-                apply(ed, "width", &ids, |n| {
-                    let mut nr = n.rect;
-                    nr.w = v;
-                    n.set_rect_scaling(nr)
-                });
-            }
-            if let Some(v) = num(ui, ed, "H", r.h, 1.0, 0.0..=1e6)
-                && !matches!(first.kind, NodeKind::Text { .. })
-            {
-                apply(ed, "height", &ids, |n| {
-                    let mut nr = n.rect;
-                    nr.h = v;
-                    n.set_rect_scaling(nr)
-                });
-            }
-            ui.end_row();
-        });
-        ui.separator();
-    }
-
-    // Kind-specific.
-    match &first.kind {
-        NodeKind::Text {
-            text, font_size, ..
-        } if ids.len() == 1 => {
-            let mut t = text.clone();
-            let r = ui.add(
-                egui::TextEdit::multiline(&mut t)
-                    .desired_rows(3)
-                    .desired_width(f32::INFINITY),
-            );
-            if r.changed() {
-                apply(ed, "text", &ids, |n| {
-                    if let NodeKind::Text { text, .. } = &mut n.kind {
-                        *text = t.clone();
-                    }
-                });
-            }
-            seal_on_release(ed, &r);
-            if let Some(v) = num(ui, ed, "Font size", *font_size, 0.5, 1.0..=1000.0) {
-                apply(ed, "font size", &ids, |n| {
-                    if let NodeKind::Text { font_size, .. } = &mut n.kind {
-                        *font_size = v;
-                    }
-                });
-            }
-        }
-        NodeKind::Stroke {
-            width, thinning, ..
-        } => {
-            if let Some(v) = num(ui, ed, "Ink width", *width, 0.1, 0.1..=500.0) {
-                apply(ed, "ink width", &ids, |n| {
-                    if let NodeKind::Stroke { width, .. } = &mut n.kind {
-                        *width = v;
-                    }
-                });
-            }
-            if let Some(v) = num(ui, ed, "Pressure", *thinning, 0.01, 0.0..=1.0) {
-                apply(ed, "pressure", &ids, |n| {
-                    if let NodeKind::Stroke { thinning, .. } = &mut n.kind {
-                        *thinning = v;
-                    }
-                });
-            }
-        }
-        NodeKind::Frame { clip } => {
-            let mut c = *clip;
-            if ui.checkbox(&mut c, "Clip content").changed() {
-                apply(ed, "clip", &ids, |n| n.kind = NodeKind::Frame { clip: c });
-            }
-        }
-        _ => {}
-    }
-
-    // Style.
-    let label = if matches!(first.kind, NodeKind::Text { .. } | NodeKind::Stroke { .. }) {
-        "Color"
-    } else {
-        "Fill"
-    };
-    if !matches!(first.kind, NodeKind::Line { .. })
-        && let Some(c) = color_row(ui, ed, label, first.style.fill())
-    {
-        apply(ed, "fill", &ids, |n| n.style.set_fill(c));
-    }
-    if !matches!(first.kind, NodeKind::Text { .. } | NodeKind::Stroke { .. }) {
-        if let Some(c) = color_row(ui, ed, "Stroke", first.style.stroke) {
-            apply(ed, "stroke", &ids, |n| n.style.stroke = c);
-        }
-        if first.style.stroke.is_some()
-            && let Some(v) = num(
-                ui,
-                ed,
-                "Stroke width",
-                first.style.stroke_width,
-                0.1,
-                0.0..=500.0,
-            )
-        {
-            apply(ed, "stroke width", &ids, |n| n.style.stroke_width = v);
-        }
-    }
-    if matches!(first.kind, NodeKind::Rect | NodeKind::Frame { .. })
-        && let Some(v) = num(
-            ui,
-            ed,
-            "Radius",
-            first.style.corner_radius,
-            0.5,
-            0.0..=10000.0,
-        )
-    {
-        apply(ed, "radius", &ids, |n| n.style.corner_radius = v);
-    }
-    let mut op = first.style.opacity * 100.0;
-    let r = ui
-        .horizontal(|ui| {
-            ui.label(RichText::new("Opacity").weak());
-            ui.add(egui::Slider::new(&mut op, 0.0..=100.0).suffix("%"))
-        })
-        .inner;
-    if r.changed() {
-        apply(ed, "opacity", &ids, |n| n.style.opacity = op / 100.0);
-    }
-    seal_on_release(ed, &r);
-}
-
 fn tool_icon(t: Tool) -> Icon {
     match t {
         Tool::Select => Icon::Pointer,
@@ -797,6 +545,9 @@ fn tool_icon(t: Tool) -> Icon {
         Tool::Frame => Icon::Frame,
         Tool::Rect => Icon::Rect,
         Tool::Ellipse => Icon::Ellipse,
+        Tool::Polygon => Icon::Polygon,
+        Tool::Star => Icon::Star,
+        Tool::Pen => Icon::Pen,
         Tool::Line => Icon::Line,
         Tool::Text => Icon::Text,
         Tool::Pencil => Icon::Pencil,
@@ -885,4 +636,14 @@ fn help(ctx: &egui::Context, st: &mut UiState) {
                 });
         });
     st.show_help = open;
+}
+
+/// Hand-drawn style controls (filled in with the Excalidraw milestone).
+pub(crate) fn sketch_section(
+    _ui: &mut Ui,
+    _ed: &mut Editor,
+    _ids: &[NodeId],
+    _first: &crate::model::Node,
+    _st: &mut UiState,
+) {
 }

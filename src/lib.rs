@@ -8,6 +8,7 @@ pub mod geom;
 pub mod history;
 pub mod ink;
 pub mod io;
+pub mod layout;
 #[cfg(target_os = "macos")]
 pub mod macos;
 pub mod model;

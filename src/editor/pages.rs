@@ -123,6 +123,7 @@ impl Editor {
         }
         self.meta_dirty = true; // the active page is remembered in the manifest
         self.revision += 1;
+        self.doc_stamp = super::next_stamp();
     }
 
     fn unique_page_name(&self, base: &str) -> String {
@@ -198,6 +199,7 @@ impl Editor {
         self.pages[i].name = name.to_string();
         if i == self.active_page {
             self.doc.name = name.to_string();
+            self.doc_stamp = super::next_stamp();
         } else if let Some(s) = &mut self.pages[i].stash {
             s.doc.name = name.to_string();
         }

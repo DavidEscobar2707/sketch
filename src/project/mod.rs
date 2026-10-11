@@ -6,6 +6,7 @@
 //! <root>/<Project name>/
 //!     project.json        manifest: id, name, timestamps, ordered page list
 //!     pages/<page-id>.json one infinite canvas per page
+//!     assets/<hash>.<ext> images used by image fills
 //!     thumbnail.png       preview for the home screen (written by the app)
 //! <root>/.trash/<Project name>~<timestamp>/   deleted projects, restorable
 //! ```
@@ -21,6 +22,7 @@ use std::path::{Path, PathBuf};
 pub const MANIFEST: &str = "project.json";
 pub const PAGES_DIR: &str = "pages";
 pub const THUMBNAIL: &str = "thumbnail.png";
+pub const ASSETS_DIR: &str = "assets";
 pub const TRASH_DIR: &str = ".trash";
 const TRASH_INFO: &str = "trashinfo.json";
 

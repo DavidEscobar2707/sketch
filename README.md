@@ -5,9 +5,12 @@ behavior of [Paper](https://paper.design) and built clean-room on `wgpu` + `wini
 
 ![paper-rs main window](docs/screenshots/app_demo.png)
 
-Frames (artboards), shapes, vector text and pressure-sensitive freehand ink live on an
-infinite canvas with smooth pan and zoom. You get selection, move, resize and snapping, a
-layers panel, transactional undo/redo, a local `.paper-rs` file format, and PNG/SVG export.
+A local-first design and whiteboard tool. Projects are folders of pages; each page is an
+infinite canvas with frames, groups, components and instances, auto layout and constraints,
+vector paths and booleans, gradients and image fills, rich text, smart guides, and
+pressure-sensitive ink. Everything autosaves, and exports to PNG and SVG.
+
+![Figma-core features](docs/screenshots/milestone3_figma_core.png)
 
 > **Clean-room note.** `analysis/PAPER_ARCHITECTURE.md` documents how Paper Desktop 0.5.15 is
 > put together, from a licensed install. The Electron package turned out to be a thin shell
@@ -143,55 +146,69 @@ These match Paper wherever Paper's shortcuts are visible: the desktop menu defin
 ⌘⇧Z, ⌘X/C/V, ⌘A, and canvas zoom on ⌘+, ⌘-, ⌘0. Paper's tool hotkeys live in its web client,
 so the tool letters follow the shared design-tool convention.
 
-## Feature parity with Paper
+## Feature parity: Paper / Figma / Excalidraw vs paper-rs
 
-"Paper evidence" says where the Paper behavior is known from. **Shell** means seen directly in
-the desktop bundle. **Inferred** means deduced from the shell's integration points. **Brief**
-means requested in the project brief rather than observed.
+Columns 2–4 say whether each product has the feature (✓) and where the behavior was learned:
+Paper from its desktop shell and public docs (`analysis/PAPER_ARCHITECTURE.md`), Figma from
+public docs (`analysis/FIGMA_NOTES.md`), Excalidraw from its MIT source
+(`analysis/EXCALIDRAW_NOTES.md`). The last column is paper-rs: ✅ done, ⚠️ partial (see
+Known gaps), ⏳ planned in a later milestone, ❌ not planned.
 
-| Feature | Paper evidence | paper-rs |
-|---|---|---|
-| Infinite canvas, pan/zoom, ⌘+/-/0 | Shell (`paper-tab.ts`, `application-menu.ts`) | ✅ Zoom about cursor (1%–25600%), adaptive dot grid, fit and fit-selection |
-| Artboards / frames | Shell (`create_artboard`) | ✅ Clipping frames, nested frames, name labels, adopt-on-draw, reparent-on-drop |
-| Boxes / shapes | Inferred (HTML elements) | ✅ Rectangle (radius), ellipse, line. ❌ CSS box model, auto layout |
-| Text | Inferred | ✅ Vector text, wrapping, alignment field, inline editing. ⚠️ One font, no rich text |
-| Freehand sketching | Brief | ✅ Smoothing, simulated and real (touch/pen force) pressure, eraser |
-| Selection | Shell (`get_selection`) | ✅ Click, deep select, Shift toggle, marquee, select all, Esc to parent |
-| Move / resize | Inferred | ✅ 8 handles, Shift aspect, Alt from center, multi-select scaling, nudge |
-| Snapping | Brief | ✅ Edges and centers against siblings and frames, guides, pixel rounding. ❌ Spacing guides |
-| Layers panel | Brief | ✅ Tree, select, rename, hide, lock, reorder. ❌ Drag-and-drop in panel |
-| Undo / redo | Shell (`edit-command`) | ✅ Transactional, one step per gesture, coalesced property edits |
-| Style editing | Shell (`update_styles`) | ✅ Fill, stroke, width, radius, opacity, font size, ink width/pressure |
-| Copy / paste / duplicate | Shell (menu roles) | ✅ Internal clipboard with subtrees. ❌ System clipboard interop |
-| Persistence | Shell: cloud files via sync server | ✅ Local versioned `.paper-rs` JSON, atomic saves. ❌ Cloud sync / multiplayer |
-| PNG export | Inferred (`exportImages`) | ✅ 1–3x, selection or all, transparent or white |
-| SVG export | — | ✅ Clip paths, outlined glyphs (font-independent) |
-| PDF / video export | Shell (`export-pdf`, html-in-canvas) | ❌ |
-| Local images | Shell (`paper-asset:` protocol) | ❌ |
-| Tabs / multi-window / dashboard | Shell (`window-manager.ts`) | ❌ (one document per window) |
-| Pages | Inferred (`pageId`) | ❌ (single page) |
-| AI agent bridge (MCP), Figma import, CLI | Shell (`src/mcp`, `open-figma-oauth`, Go CLI) | ❌ (headless CLI for screenshots/export only) |
+| Feature | Paper | Figma | Excalidraw | paper-rs |
+|---|---|---|---|---|
+| Local projects, recents grid, trash | (cloud dashboard) | ✓ (cloud) | (single file) | ✅ Folders in `~/Documents/paper-rs`, thumbnails, rename/duplicate/trash/restore |
+| Autosave, crash-safe, versioned files | ✓ (cloud) | ✓ (cloud) | ✓ (browser storage) | ✅ 1 s autosave, atomic writes, migration chain (page v1→v3) |
+| Pages, infinite canvas per page | ✓ | ✓ | – | ✅ Per-page history and camera, reorder/duplicate/delete |
+| Frames with clipping | ✓ | ✓ | ✓ | ✅ ⚠️ clip is rectangular (corner radius not clipped) |
+| Groups | ✓ | ✓ | ✓ | ✅ Bounds follow children, click selects group, double-click enters, scale on resize |
+| Components, instances, overrides | – | ✓ | (library only) | ✅ Live sync, per-property overrides, reset, detach, go to main |
+| Auto layout (direction, gap, padding, hug/fill/fixed, wrap) | ✓ (flexbox) | ✓ | – | ✅ Drag-reorder in flow, space-between, absolute children |
+| Constraints | – | ✓ | – | ✅ Left/right/stretch/center/scale per axis, ⌘ to ignore |
+| Pen tool, vector point editing | ✓ | ✓ | – | ✅ Corner/smooth points, handles (⌥ breaks), close, delete, toggle |
+| Boolean ops (union/subtract/intersect/exclude), flatten | (roadmap) | ✓ | – | ✅ ⚠️ destructive (result is a path, curves flattened) |
+| Gradients (linear, radial) | ✓ | ✓ | – | ✅ Multi-stop, angle, radius; ⚠️ no on-canvas gradient handles |
+| Image fills | ✓ | ✓ | ✓ (image element) | ✅ Fill/fit/stretch/tile, place image (⌘⇧K), drag-and-drop, stored in project |
+| Strokes: width, align, dash, caps, joins | ✓ | ✓ | ✓ | ✅ |
+| Corner radius (per corner), polygons, stars | ✓ | ✓ | – | ✅ |
+| Opacity, blend modes | ✓ | ✓ | ✓ (opacity) | ✅ ⚠️ canvas renders 5 modes exactly, all 16 exact in SVG |
+| Rich text (per-range bold/italic/size/colour) | ✓ | ✓ | – | ✅ Plus underline, strikethrough, line height, letter spacing |
+| Align / distribute | ✓ | ✓ | ✓ | ✅ ⌥A/D/W/S/H/V, ⌥⇧H/V |
+| Smart guides, spacing, measurement | ✓ | ✓ | – | ✅ Edge/center snap, equal spacing, ⌥-hover distances |
+| Hand-drawn (rough) style per element | – | – | ✓ | ⏳ M4 |
+| Bound arrows, elbow arrows, quick shapes, sticky notes | – | (FigJam) | ✓ | ⏳ M4 |
+| Laser pointer, shape library | – | (FigJam) | ✓ | ⏳ M4 |
+| Inspector, layers drag-reorder, command palette (⌘K) | ✓ | ✓ | ✓ | ⚠️ inspector done; ⏳ M5 for the rest |
+| Export PNG / SVG / PDF of selection, frame, page | ✓ | ✓ | ✓ (PNG/SVG) | ⚠️ PNG/SVG done; ⏳ PDF in M6 |
+| Import .excalidraw / SVG, copy-paste across projects | – | ✓ (SVG) | ✓ | ⚠️ cross-project paste done; ⏳ M6 |
+| Freehand ink with pressure | – | (pencil) | ✓ | ✅ Smoothing, pressure, eraser |
+| Multiplayer, cloud sync, plugins, MCP | ✓ | ✓ | ✓ | ❌ local-first by design |
 
 ## Known gaps
 
-* **Paper's document model is HTML/CSS.** Paper nodes are DOM elements with CSS styles and
-  layout. paper-rs uses geometric primitives with absolute positions inside frames. There is
-  no flex/auto layout, components, variables or code export.
+* **Paper's document model is HTML/CSS.** paper-rs uses geometric nodes with flexbox-like auto
+  layout on frames; there are no variables, CSS export or code generation.
+* **Rendering approximations.** Frame clipping is a rectangle (scissor), so rounded frames
+  don't clip their corners. Group opacity multiplies into children instead of compositing the
+  group. Overlay, color dodge/burn, hard/soft light, difference, exclusion, hue, saturation,
+  color and luminosity blend as Normal on the canvas (they are exact in SVG export).
+* **Booleans are destructive**: the result is a new vector path with flattened curves.
+  Gradients are edited in the inspector only.
 * **Not run on macOS hardware yet.** The macOS build type-checks and uses only portable APIs
   (Metal via wgpu, winit, rfd), but it has not been launched on a Mac. On Linux, the real
   window was exercised under Xvfb; the screenshot is `x11_window_xvfb.png`.
 * **Pen pressure.** winit 0.30 does not expose tablet pressure for pen events that arrive as
   mouse input, which is common with macOS and Wacom tablets. Pressure comes from touch/pen
   `force` when the platform reports it. Otherwise it is simulated from stroke velocity.
-* **Text** is single-font (Inter Regular) with no shaping, so there are no ligatures, no complex
-  scripts and no RTL. There is no in-text selection range and no up/down caret movement, and
-  IME preedit is not displayed (committed text works).
-* **No rotation, boolean operations, bezier pen tool or images.** Opacity on a frame
-  multiplies into its children on the GPU. True group compositing only happens in SVG export.
+* **Text** uses Inter (regular, bold, italic, bold italic) with no shaping, so there are no
+  ligatures, complex scripts or RTL, and no font picker. IME preedit is not displayed
+  (committed text works).
+* **No rotation.** Nodes are axis-aligned boxes; rotated imports are baked into paths.
 * **Undo granularity.** Document renames from the Design panel are not undoable, and the
   selection is not part of history.
-* **Performance.** The visible scene is re-tessellated whenever the view changes, with no
-  per-node mesh cache. That is smooth for thousands of nodes, but not tuned for 100k or more.
+* **Performance.** Nodes are tessellated once per zoom octave and cached; unchanged frames
+  reuse the previous item list and GPU buffers, so panning uploads nothing. With 10k visible
+  nodes a cached frame takes ~3 ms (release, `tests/perf.rs`); the first frame at a new zoom
+  octave takes ~140 ms on a CPU. Not tuned for 100k+.
 * **Linux file dialogs** need an XDG desktop portal. Without one, Save/Open dialogs return
   nothing. The headless CLI is unaffected.
 
@@ -199,14 +216,19 @@ means requested in the project brief rather than observed.
 
 ```
 src/geom.rs        vectors, rects, camera
-src/model/         Node / NodeKind / Document arena
+src/vector.rs      bezier paths: flatten, hit test, SVG data, shapes, dashes
+src/model/         Node / NodeKind / paints / Document arena
 src/history.rs     transactions, undo/redo
+src/layout.rs      auto layout, constraints, group bounds
 src/ink.rs         stroke smoothing, pressure, outline
-src/text.rs        glyph layout and outlines
-src/editor/        tools, hit testing, snapping, shortcuts, scenario tests
-src/render/        lyon → wgpu canvas, headless capture, full-frame painter
-src/io/            .paper-rs, PNG, SVG
-src/ui.rs          egui panels
+src/text.rs        rich text layout and glyph outlines
+src/assets.rs      image registry (content-hashed)
+src/project/       project store, manifest/page formats, migrations
+src/session.rs     open project, autosave, thumbnails
+src/editor/        tools, structure (groups/components), vector ops, pages, text editing
+src/render/        draw ops → cached meshes → wgpu; headless capture
+src/io/            PNG, SVG, atomic writes, imports
+src/ui/            home screen, pages, layers, inspector
 src/app.rs         winit application
 analysis/          reverse-engineering findings and design (raw dumps are gitignored)
 docs/screenshots/  headless renders produced by `cargo test`

@@ -326,6 +326,19 @@ impl App {
         }
     }
 
+    fn place_image_file(&mut self, p: &std::path::Path, at: V2) {
+        match std::fs::read(p)
+            .map_err(|e| e.to_string())
+            .and_then(|b| crate::assets::register(&b))
+        {
+            Ok(id) => {
+                self.ed.insert_image(&id, at);
+                self.ed.status = format!("Placed {}", p.display());
+            }
+            Err(e) => self.error(format!("Could not place {}: {e}", p.display())),
+        }
+    }
+
     fn export_roots(&self) -> Option<Vec<crate::model::NodeId>> {
         let sel = self.ed.top_selection();
         (!sel.is_empty()).then_some(sel)
@@ -335,6 +348,43 @@ impl App {
         for req in std::mem::take(&mut self.ed.requests) {
             match req {
                 AppRequest::Home => self.go_home(),
+                AppRequest::ImageFill(ids, i) => {
+                    let Some(p) = rfd::FileDialog::new()
+                        .add_filter("Images", &["png", "jpg", "jpeg", "gif", "webp"])
+                        .pick_file()
+                    else {
+                        continue;
+                    };
+                    match std::fs::read(&p)
+                        .map_err(|e| e.to_string())
+                        .and_then(|b| crate::assets::register(&b))
+                    {
+                        Ok(asset) => {
+                            ui::inspector::apply(&mut self.ed, "fills", &ids, |n| {
+                                let paint = crate::model::Paint::Image {
+                                    asset: asset.clone(),
+                                    mode: crate::model::ImageMode::Fill,
+                                    opacity: 1.0,
+                                };
+                                match n.style.fills.get_mut(i) {
+                                    Some(slot) => *slot = paint,
+                                    None => n.style.fills.push(paint),
+                                }
+                            });
+                        }
+                        Err(e) => self.error(format!("Could not load {}: {e}", p.display())),
+                    }
+                }
+                AppRequest::PlaceImage => {
+                    let Some(p) = rfd::FileDialog::new()
+                        .add_filter("Images", &["png", "jpg", "jpeg", "gif", "webp"])
+                        .pick_file()
+                    else {
+                        continue;
+                    };
+                    let at = self.ed.camera.screen_to_world(self.ed.viewport * 0.5);
+                    self.place_image_file(&p, at);
+                }
                 AppRequest::New => self.new_project(),
                 AppRequest::Open => self.import_dialog(),
                 AppRequest::Save => {
@@ -885,11 +935,19 @@ impl ApplicationHandler<UserEvent> for App {
                     self.gfx.as_ref().unwrap().window.request_redraw();
                     return;
                 }
-                let key = map_key(&event.logical_key).or_else(|| match &event.physical_key {
+                let physical = match &event.physical_key {
                     // Shortcuts should work regardless of the active keyboard layout's shift state.
                     winit::keyboard::PhysicalKey::Code(c) => physical_char(*c).map(Key::Char),
                     _ => None,
-                });
+                };
+                // Alt changes the logical character on macOS (⌥A types "å"), so chords with
+                // Alt (and with ⌘/Ctrl) resolve by physical key instead.
+                let chord = self.ed.mods.alt || self.ed.mods.command();
+                let key = if chord && self.ed.text_edit.is_none() {
+                    physical.clone().or_else(|| map_key(&event.logical_key))
+                } else {
+                    map_key(&event.logical_key).or(physical)
+                };
                 if let Some(key) = key {
                     match event.state {
                         ElementState::Pressed => {
@@ -916,7 +974,18 @@ impl ApplicationHandler<UserEvent> for App {
                 redraw = true;
             }
             WindowEvent::DroppedFile(p) => {
-                if p.extension().is_some_and(|e| e == file::EXTENSION) && self.confirm_discard() {
+                let ext = p
+                    .extension()
+                    .map(|e| e.to_string_lossy().to_lowercase())
+                    .unwrap_or_default();
+                if matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp")
+                    && self.st.home.is_none()
+                {
+                    let at = self.ed.camera.screen_to_world(self.ed.pointer);
+                    self.place_image_file(&p, at);
+                } else if p.extension().is_some_and(|e| e == file::EXTENSION)
+                    && self.confirm_discard()
+                {
                     match file::load(&p) {
                         Ok((doc, cam)) => self.ed.load(doc, cam, Some(p)),
                         Err(e) => self.error(format!("Could not open {}: {e}", p.display())),
@@ -1002,9 +1071,47 @@ fn physical_char(c: winit::keyboard::KeyCode) -> Option<char> {
         BracketRight => ']',
         Equal => '=',
         Minus => '-',
+        Quote => '\'',
+        Slash => '/',
+        Backslash => '\\',
+        Comma => ',',
+        Period => '.',
         Digit0 => '0',
         Digit1 => '1',
         Digit2 => '2',
+        Digit3 => '3',
+        Digit4 => '4',
+        Digit5 => '5',
+        Digit6 => '6',
+        Digit7 => '7',
+        Digit8 => '8',
+        Digit9 => '9',
+        KeyA => 'a',
+        KeyB => 'b',
+        KeyC => 'c',
+        KeyD => 'd',
+        KeyE => 'e',
+        KeyF => 'f',
+        KeyG => 'g',
+        KeyH => 'h',
+        KeyI => 'i',
+        KeyJ => 'j',
+        KeyK => 'k',
+        KeyL => 'l',
+        KeyM => 'm',
+        KeyN => 'n',
+        KeyO => 'o',
+        KeyP => 'p',
+        KeyQ => 'q',
+        KeyR => 'r',
+        KeyS => 's',
+        KeyT => 't',
+        KeyU => 'u',
+        KeyV => 'v',
+        KeyW => 'w',
+        KeyX => 'x',
+        KeyY => 'y',
+        KeyZ => 'z',
         _ => return None,
     })
 }

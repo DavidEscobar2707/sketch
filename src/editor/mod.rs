@@ -7,6 +7,9 @@ pub mod input;
 pub mod pages;
 pub mod shortcuts;
 pub mod snap;
+pub mod structure;
+pub mod text_edit;
+pub mod vector_ops;
 
 use crate::geom::{Camera, Rect, V2, next_zoom_step, v2};
 use crate::history::{History, Recording, Tx};
@@ -25,20 +28,26 @@ pub enum Tool {
     Frame,
     Rect,
     Ellipse,
+    Polygon,
+    Star,
     Line,
+    Pen,
     Text,
     Pencil,
     Eraser,
 }
 
 impl Tool {
-    pub const ALL: [Tool; 9] = [
+    pub const ALL: [Tool; 12] = [
         Tool::Select,
         Tool::Hand,
         Tool::Frame,
         Tool::Rect,
         Tool::Ellipse,
+        Tool::Polygon,
+        Tool::Star,
         Tool::Line,
+        Tool::Pen,
         Tool::Text,
         Tool::Pencil,
         Tool::Eraser,
@@ -50,7 +59,10 @@ impl Tool {
             Tool::Frame => "Frame",
             Tool::Rect => "Rectangle",
             Tool::Ellipse => "Ellipse",
+            Tool::Polygon => "Polygon",
+            Tool::Star => "Star",
             Tool::Line => "Line",
+            Tool::Pen => "Pen",
             Tool::Text => "Text",
             Tool::Pencil => "Pencil",
             Tool::Eraser => "Eraser",
@@ -63,9 +75,12 @@ impl Tool {
             Tool::Frame => "F",
             Tool::Rect => "R",
             Tool::Ellipse => "O",
+            Tool::Polygon => "⇧Y",
+            Tool::Star => "⇧S",
             Tool::Line => "L",
+            Tool::Pen => "P",
             Tool::Text => "T",
-            Tool::Pencil => "P",
+            Tool::Pencil => "⇧P",
             Tool::Eraser => "E",
         }
     }
@@ -82,6 +97,10 @@ pub enum AppRequest {
     SaveAs,
     ExportPng,
     ExportSvg,
+    /// Pick an image file and place it on the canvas.
+    PlaceImage,
+    /// Pick an image for fill layer `.1` of these layers.
+    ImageFill(Vec<NodeId>, usize),
 }
 
 #[derive(Debug, Clone)]
@@ -120,6 +139,9 @@ enum Gesture {
         start: V2,
         bounds0: Rect,
         origins: Vec<(NodeId, Rect)>,
+        /// Every node in the resized subtrees as it was at drag start (constraints and
+        /// group scaling are recomputed from this each move, so nothing drifts).
+        snapshot: Vec<Node>,
     },
     Create {
         tool: Tool,
@@ -131,6 +153,18 @@ enum Gesture {
         id: NodeId,
     },
     Erase,
+    /// Pen tool: dragging out the handles of the point just placed.
+    Pen,
+    /// Drag-selecting text inside the text being edited.
+    TextSelect {
+        id: NodeId,
+    },
+    /// Dragging a point or handle of the path being edited.
+    PathPart {
+        si: usize,
+        pi: usize,
+        part: vector_ops::PointPart,
+    },
 }
 
 /// Drag distance (screen px) before a press turns into a move.
@@ -168,8 +202,11 @@ pub struct Editor {
     rec: Option<(Recording, Option<String>)>,
     saved_marker: Option<usize>,
     last_click: Option<(V2, f64)>,
-    /// Bumps on every document mutation; lets renderers cache.
+    /// Bumps on every document or view change; drives repaints.
     pub revision: u64,
+    /// Process-unique stamp of the document content: changes whenever the document may
+    /// have changed (edits, undo, page switch, load). Renderers reuse work while it holds.
+    pub doc_stamp: u64,
     /// Fit the camera to the content once the real viewport size is known.
     pub pending_fit: bool,
     /// Pages of the open project; the active one's content is `doc`/`history`/`camera`.
@@ -177,6 +214,14 @@ pub struct Editor {
     pub active_page: usize,
     /// Page list or names changed (not tracked by undo history).
     pub meta_dirty: bool,
+    /// Auto-layout frames not re-laid out while a child is being dragged inside them.
+    pub layout_suspended: Vec<NodeId>,
+    /// Pen tool in progress.
+    pub pen: Option<vector_ops::PenState>,
+    /// Path point editing in progress.
+    pub path_edit: Option<vector_ops::PathEdit>,
+    /// Alt-hover distance measurements (world space).
+    pub measures: Vec<Guide>,
 }
 
 impl Default for Editor {
@@ -220,10 +265,15 @@ impl Editor {
             saved_marker: Some(0),
             last_click: None,
             revision: 0,
+            doc_stamp: next_stamp(),
             pending_fit: false,
             pages: vec![PageSlot::new(&name)],
             active_page: 0,
             meta_dirty: false,
+            layout_suspended: Vec::new(),
+            pen: None,
+            path_edit: None,
+            measures: Vec::new(),
         }
     }
 
@@ -245,11 +295,13 @@ impl Editor {
             self.rec = Some((Recording::new("Edit", &self.doc), None));
         }
         self.revision += 1;
+        self.doc_stamp = next_stamp();
         let (rec, _) = self.rec.as_mut().unwrap();
         Tx::new(&mut self.doc, rec)
     }
 
     pub fn commit(&mut self) {
+        self.fixup();
         if let Some((rec, key)) = self.rec.take()
             && self.history.commit(&self.doc, rec, key)
         {
@@ -299,6 +351,7 @@ impl Editor {
 
     fn after_history(&mut self) {
         self.revision += 1;
+        self.doc_stamp = next_stamp();
         self.selection.retain(|id| self.doc.nodes.contains_key(id));
     }
 
@@ -479,7 +532,10 @@ impl Editor {
 
     pub fn handle(&mut self, ev: InputEvent) {
         match ev {
-            InputEvent::Modifiers(m) => self.mods = m,
+            InputEvent::Modifiers(m) => {
+                self.mods = m;
+                self.update_measures();
+            }
             InputEvent::PointerDown {
                 pos,
                 button,
@@ -625,7 +681,11 @@ impl Editor {
                 });
                 self.tool = Tool::Select;
             }
-            Tool::Frame | Tool::Rect | Tool::Ellipse | Tool::Line => {
+            Tool::Pen => {
+                self.pen_down(world, pos);
+                self.gesture = Gesture::Pen;
+            }
+            Tool::Frame | Tool::Rect | Tool::Ellipse | Tool::Polygon | Tool::Star | Tool::Line => {
                 self.end_text_edit();
                 let label = format!("Add {}", self.tool.label().to_lowercase());
                 self.begin(&label);
@@ -636,6 +696,11 @@ impl Editor {
                     Tool::Frame => NodeKind::Frame { clip: true },
                     Tool::Rect => NodeKind::Rect,
                     Tool::Ellipse => NodeKind::Ellipse,
+                    Tool::Polygon => NodeKind::Polygon { sides: 3 },
+                    Tool::Star => NodeKind::Star {
+                        points: 5,
+                        inner: 0.38,
+                    },
                     _ => NodeKind::Line {
                         a: V2::ZERO,
                         b: V2::ZERO,
@@ -666,6 +731,32 @@ impl Editor {
     }
 
     fn select_down(&mut self, pos: V2, world: V2, double: bool) {
+        if self.path_edit.is_some() {
+            if let Some((si, pi, part)) = self.path_part_at(pos) {
+                if double && part == vector_ops::PointPart::Anchor {
+                    self.toggle_point_smooth(si, pi);
+                    return;
+                }
+                if let Some(pe) = &mut self.path_edit {
+                    pe.selected = Some((si, pi));
+                }
+                self.begin("Edit path");
+                self.gesture = Gesture::PathPart { si, pi, part };
+                return;
+            }
+            let on_path = self
+                .path_edit
+                .as_ref()
+                .is_some_and(|pe| hit::node_contains(&self.doc, pe.id, world, self.camera.zoom));
+            if !on_path {
+                self.path_edit = None;
+            } else {
+                if let Some(pe) = &mut self.path_edit {
+                    pe.selected = None;
+                }
+                return;
+            }
+        }
         // Resize handles of the current selection take priority.
         if self.text_edit.is_none()
             && let Some(b) = self.selection_bounds()
@@ -675,11 +766,17 @@ impl Editor {
                 let origins = self.top_selection_world();
                 if !origins.is_empty() {
                     self.begin("Resize");
+                    let snapshot = origins
+                        .iter()
+                        .flat_map(|(id, _)| self.doc.subtree(*id))
+                        .filter_map(|id| self.doc.get(id).cloned())
+                        .collect();
                     self.gesture = Gesture::Resize {
                         handle,
                         start: world,
                         bounds0: b,
                         origins,
+                        snapshot,
                     };
                     return;
                 }
@@ -706,6 +803,10 @@ impl Editor {
             && te.id == h
         {
             self.start_text_edit(h, Some(world));
+            if double {
+                self.gesture = Gesture::None;
+                self.select_word();
+            }
             return;
         }
         self.end_text_edit();
@@ -727,12 +828,21 @@ impl Editor {
             self.start_text_edit(target, Some(world));
             return;
         }
+        if double && matches!(node.kind, NodeKind::Path { .. }) && self.selection == [target] {
+            self.start_path_edit(target);
+            return;
+        }
+        // Groups and instances capture clicks until entered (double-click or Cmd-click).
+        if !self.mods.command() {
+            target = self.click_target(target, double);
+        }
         // If an ancestor is already selected, keep dragging the ancestor.
-        if let Some(a) = self
-            .doc
-            .ancestors(target)
-            .into_iter()
-            .find(|a| self.selection.contains(a))
+        if !double
+            && let Some(a) = self
+                .doc
+                .ancestors(target)
+                .into_iter()
+                .find(|a| self.selection.contains(a))
         {
             target = a;
         }
@@ -756,6 +866,52 @@ impl Editor {
             start: world,
             click_select,
         };
+    }
+
+    /// Alt held with a selection: measure to the hovered layer, or to the parent frame.
+    pub fn update_measures(&mut self) {
+        self.measures.clear();
+        if !self.mods.alt || self.tool != Tool::Select {
+            return;
+        }
+        let Some(sel) = self.selection_bounds() else {
+            return;
+        };
+        let other = self
+            .hover
+            .filter(|h| !self.selection.contains(h))
+            .or_else(|| {
+                self.selection
+                    .first()
+                    .and_then(|id| self.doc.get(*id)?.parent)
+            });
+        if let Some(r) = other.and_then(|o| self.doc.world_rect(o)) {
+            self.measures = snap::measure(&sel, &r);
+        }
+    }
+
+    /// The layer a click on `hit` selects: the outermost group or instance not yet entered.
+    fn click_target(&self, hit: NodeId, double: bool) -> NodeId {
+        let mut chain = self.doc.ancestors(hit);
+        chain.reverse();
+        chain.push(hit);
+        for a in chain {
+            let n = self.doc.get(a).unwrap();
+            let captures = n.is_group() || self.is_instance_root(a);
+            if !captures || a == hit {
+                continue;
+            }
+            let entered = self
+                .selection
+                .iter()
+                .any(|s| *s != a && self.doc.is_ancestor(a, *s));
+            let selected = self.selection.contains(&a);
+            if entered || (selected && double) {
+                continue;
+            }
+            return a;
+        }
+        hit
     }
 
     fn start_marquee(&mut self, world: V2, scope: Option<NodeId>) {
@@ -792,6 +948,7 @@ impl Editor {
                 } else {
                     None
                 };
+                self.update_measures();
             }
             Gesture::Pan { last } => {
                 self.camera.pan_by_screen(pos - last);
@@ -817,6 +974,15 @@ impl Editor {
                 }
                 let bounds0 = Rect::union_all(origins.iter().map(|(_, r)| r)).unwrap();
                 self.begin("Move");
+                // Auto-layout parents hold still while their children are dragged around.
+                self.layout_suspended = origins
+                    .iter()
+                    .filter_map(|(id, _)| {
+                        let n = self.doc.get(*id)?;
+                        let p = self.doc.get(n.parent?)?;
+                        (p.layout.is_some() && !n.layout_child.absolute).then_some(p.id)
+                    })
+                    .collect();
                 self.gesture = Gesture::Move {
                     start,
                     origins,
@@ -851,13 +1017,27 @@ impl Editor {
                         self.snap_threshold(),
                     );
                     moved = moved.translate(v2(sx, sy));
-                    if sx == 0.0 {
+                    self.guides = guides;
+                    // Equal spacing between neighbors on axes that didn't edge-snap.
+                    let (gx, gy, gaps) = snap::snap_spacing(&moved, &cands, self.snap_threshold());
+                    let gx = if sx == 0.0 { gx } else { 0.0 };
+                    let gy = if sy == 0.0 { gy } else { 0.0 };
+                    if gx != 0.0 || gy != 0.0 || !gaps.is_empty() {
+                        moved = moved.translate(v2(gx, gy));
+                        self.guides.extend(gaps.into_iter().filter(|g| match g {
+                            Guide::Gap { a, b } => {
+                                ((a.y - b.y).abs() < 1e-9 && sx == 0.0)
+                                    || ((a.x - b.x).abs() < 1e-9 && sy == 0.0)
+                            }
+                            _ => true,
+                        }));
+                    }
+                    if sx == 0.0 && gx == 0.0 {
                         moved.x = moved.x.round();
                     }
-                    if sy == 0.0 {
+                    if sy == 0.0 && gy == 0.0 {
                         moved.y = moved.y.round();
                     }
-                    self.guides = guides;
                 }
                 let d = moved.min() - bounds0.min();
                 for (id, r0) in &origins {
@@ -868,6 +1048,9 @@ impl Editor {
                         n.rect = r;
                     }
                 }
+                let ids: Vec<NodeId> = origins.iter().map(|(id, _)| *id).collect();
+                self.mark_overrides(&ids, "position");
+                self.fixup();
                 self.gesture = Gesture::Move {
                     start,
                     origins,
@@ -879,8 +1062,19 @@ impl Editor {
                 start,
                 bounds0,
                 origins,
+                snapshot,
             } => {
                 let nb = self.resize_bounds(handle, start, world, bounds0);
+                // Restore the drag-start state, then apply this frame's size from it.
+                {
+                    let mut tx = self.tx();
+                    for n in &snapshot {
+                        if tx.doc().get(n.id) != Some(n) {
+                            tx.put(n.clone());
+                        }
+                    }
+                }
+                let ignore_constraints = self.mods.command();
                 let sx = if bounds0.w > 1e-9 {
                     nb.w / bounds0.w
                 } else {
@@ -900,16 +1094,34 @@ impl Editor {
                     );
                     let parent = self.doc.get(*id).and_then(|n| n.parent);
                     let o = self.doc.parent_origin(parent);
-                    if let Some(n) = self.tx().node_mut(*id) {
-                        n.set_rect_scaling(wr.translate(V2::ZERO - o));
+                    let old = self.doc.get(*id).map(|n| n.rect).unwrap_or_default();
+                    let new = wr.translate(V2::ZERO - o);
+                    let mut tx = self.tx();
+                    if let Some(n) = tx.node_mut(*id) {
+                        n.set_rect_scaling(new);
+                        // Manual resizing fixes the size (no more hug/fill) on that axis.
+                        if (new.w - old.w).abs() > 1e-9 {
+                            n.layout_child.sizing[0] = crate::model::Sizing::Fixed;
+                        }
+                        if (new.h - old.h).abs() > 1e-9 {
+                            n.layout_child.sizing[1] = crate::model::Sizing::Fixed;
+                        }
+                    }
+                    let group = tx.doc().get(*id).is_some_and(|n| n.is_group());
+                    if group || !ignore_constraints {
+                        crate::layout::resize_children(&mut tx, *id, old, new);
                     }
                     self.fit_text(*id);
                 }
+                let ids: Vec<NodeId> = origins.iter().map(|(id, _)| *id).collect();
+                self.mark_overrides(&ids, "size");
+                self.fixup();
                 self.gesture = Gesture::Resize {
                     handle,
                     start,
                     bounds0,
                     origins,
+                    snapshot,
                 };
             }
             Gesture::Marquee { start, scope, base } => {
@@ -977,6 +1189,28 @@ impl Editor {
             Gesture::Erase => {
                 self.erase_at(world);
                 self.gesture = Gesture::Erase;
+            }
+            Gesture::Pen => {
+                self.pen_drag(world);
+                self.gesture = Gesture::Pen;
+            }
+            Gesture::TextSelect { id } => {
+                if let (Some(n), Some(wr)) = (self.doc.get(id), self.doc.world_rect(id))
+                    && let Some(l) = text::layout_node(n)
+                    && let Some(te) = &mut self.text_edit
+                {
+                    te.caret = l.hit(world - wr.min());
+                }
+                self.gesture = Gesture::TextSelect { id };
+            }
+            Gesture::PathPart { si, pi, part } => {
+                let w = if self.snapping && !self.mods.command() {
+                    world.round()
+                } else {
+                    world
+                };
+                self.drag_path_part(si, pi, part, w);
+                self.gesture = Gesture::PathPart { si, pi, part };
             }
         }
     }
@@ -1088,7 +1322,10 @@ impl Editor {
                 }
             }
             Gesture::Move { origins, .. } => {
-                self.reparent_after_move(origins.iter().map(|(id, _)| *id).collect());
+                let ids: Vec<NodeId> = origins.iter().map(|(id, _)| *id).collect();
+                self.drop_into_auto_layout(&ids);
+                self.layout_suspended.clear();
+                self.reparent_after_move(ids);
                 self.guides.clear();
                 self.commit();
             }
@@ -1131,6 +1368,15 @@ impl Editor {
                 self.commit();
             }
             Gesture::Erase => self.commit(),
+            Gesture::Pen => self.pen_up(),
+            Gesture::TextSelect { .. } => {
+                if let Some(te) = &mut self.text_edit
+                    && te.anchor == Some(te.caret)
+                {
+                    te.anchor = None;
+                }
+            }
+            Gesture::PathPart { .. } => self.commit(),
         }
     }
 
@@ -1155,6 +1401,30 @@ impl Editor {
         let mut tx = self.tx();
         for id in inside {
             tx.reparent(id, Some(frame), None);
+        }
+    }
+
+    /// Dragged children of an auto-layout frame that are still over it take a new place in
+    /// its flow (by the drop position); dragged layers dropped onto an auto-layout frame
+    /// join its flow at the drop position.
+    fn drop_into_auto_layout(&mut self, ids: &[NodeId]) {
+        for id in ids.iter().copied() {
+            let Some(r) = self.doc.world_rect(id) else {
+                continue;
+            };
+            let target = self.frame_at(r.center(), ids);
+            let Some(t) = target.filter(|t| self.doc.get(*t).is_some_and(|f| f.layout.is_some()))
+            else {
+                continue;
+            };
+            let fo = self.doc.world_rect(t).unwrap().min();
+            let idx = crate::layout::drop_index(&self.doc, t, id, r.center() - fo);
+            let mut tx = self.tx();
+            if tx.doc().get(id).and_then(|n| n.parent) == Some(t) {
+                tx.move_to_index(id, idx);
+            } else {
+                tx.reparent(id, Some(t), Some(idx));
+            }
         }
     }
 
@@ -1226,16 +1496,12 @@ impl Editor {
     /// Recompute a text node's box from its content.
     pub fn fit_text(&mut self, id: NodeId) {
         let Some(n) = self.doc.get(id) else { return };
-        let NodeKind::Text {
-            text: t,
-            font_size,
-            auto_width,
-            align,
-        } = &n.kind
-        else {
+        let NodeKind::Text { auto_width, .. } = &n.kind else {
             return;
         };
-        let l = text::layout(t, *font_size, (!auto_width).then_some(n.rect.w), *align);
+        let Some(l) = text::layout_node(n) else {
+            return;
+        };
         let (w, h) = (
             if *auto_width {
                 l.width.max(1.0)
@@ -1255,25 +1521,27 @@ impl Editor {
 
     pub fn start_text_edit(&mut self, id: NodeId, at_world: Option<V2>) {
         let Some(n) = self.doc.get(id) else { return };
-        let NodeKind::Text {
-            text: t,
-            font_size,
-            auto_width,
-            align,
-        } = &n.kind
-        else {
+        let NodeKind::Text { text: t, .. } = &n.kind else {
             return;
         };
-        let caret = match at_world {
-            Some(p) => {
-                let l = text::layout(t, *font_size, (!auto_width).then_some(n.rect.w), *align);
+        let len = t.chars().count();
+        let caret = match (at_world, text::layout_node(n)) {
+            (Some(p), Some(l)) => {
                 let local = p - self.doc.world_rect(id).unwrap().min();
                 l.hit(local)
             }
-            None => t.chars().count(),
+            _ => len,
         };
-        if self.text_edit.as_ref().is_some_and(|te| te.id == id) {
-            self.text_edit.as_mut().unwrap().caret = caret;
+        if let Some(te) = self.text_edit.as_mut().filter(|te| te.id == id) {
+            // Clicking inside the text being edited: place the caret (Shift extends) and
+            // start a drag selection.
+            if self.mods.shift {
+                te.anchor.get_or_insert(te.caret);
+            } else {
+                te.anchor = Some(caret);
+            }
+            te.caret = caret;
+            self.gesture = Gesture::TextSelect { id };
             return;
         }
         self.end_text_edit();
@@ -1282,8 +1550,32 @@ impl Editor {
         self.text_edit = Some(TextEdit {
             id,
             caret,
-            anchor: None,
+            anchor: if at_world.is_none() { Some(0) } else { None },
         });
+    }
+
+    /// Select the word around the caret (double-click while editing).
+    pub fn select_word(&mut self) {
+        let Some(te) = self.text_edit.clone() else {
+            return;
+        };
+        let Some(NodeKind::Text { text, .. }) = self.doc.get(te.id).map(|n| &n.kind) else {
+            return;
+        };
+        let chars: Vec<char> = text.chars().collect();
+        let is_word = |c: char| c.is_alphanumeric() || c == '_' || c == '\'';
+        let mut a = te.caret.min(chars.len());
+        let mut b = a;
+        while a > 0 && is_word(chars[a - 1]) {
+            a -= 1;
+        }
+        while b < chars.len() && is_word(chars[b]) {
+            b += 1;
+        }
+        if let Some(t) = &mut self.text_edit {
+            t.anchor = Some(a);
+            t.caret = b;
+        }
     }
 
     /// Finish text editing; empty text nodes are removed.
@@ -1291,6 +1583,9 @@ impl Editor {
         let Some(te) = self.text_edit.take() else {
             return;
         };
+        if matches!(self.gesture, Gesture::TextSelect { .. }) {
+            self.gesture = Gesture::None;
+        }
         let empty = matches!(self.doc.get(te.id).map(|n| &n.kind), Some(NodeKind::Text { text, .. }) if text.trim().is_empty());
         if empty {
             self.tx().remove(te.id);
@@ -1299,89 +1594,28 @@ impl Editor {
         self.commit();
     }
 
-    fn with_text(&mut self, f: impl FnOnce(&mut String, &mut usize)) {
-        let Some(te) = self.text_edit.clone() else {
-            return;
-        };
-        let mut caret = te.caret;
-        if let Some(n) = self.tx().node_mut(te.id)
-            && let NodeKind::Text { text, .. } = &mut n.kind
-        {
-            f(text, &mut caret);
-        }
-        self.text_edit = Some(TextEdit {
-            id: te.id,
-            caret,
-            anchor: te.anchor,
-        });
-        self.fit_text(te.id);
-    }
-
-    pub fn insert_text(&mut self, s: &str) {
-        self.with_text(|t, caret| {
-            let byte = t.char_indices().nth(*caret).map_or(t.len(), |(b, _)| b);
-            t.insert_str(byte, s);
-            *caret += s.chars().count();
-        });
-    }
-
-    fn text_key(&mut self, key: &Key) -> bool {
-        match key {
-            Key::Escape => {
-                self.end_text_edit();
-                true
-            }
-            Key::Enter if self.mods.command() => {
-                self.end_text_edit();
-                true
-            }
-            Key::Enter => {
-                self.insert_text("\n");
-                true
-            }
-            Key::Backspace => {
-                self.with_text(|t, c| {
-                    if *c > 0 {
-                        let (b, ch) = t.char_indices().nth(*c - 1).unwrap();
-                        t.replace_range(b..b + ch.len_utf8(), "");
-                        *c -= 1;
-                    }
-                });
-                true
-            }
-            Key::Delete => {
-                self.with_text(|t, c| {
-                    if let Some((b, ch)) = t.char_indices().nth(*c) {
-                        t.replace_range(b..b + ch.len_utf8(), "");
-                    }
-                });
-                true
-            }
-            Key::Left | Key::Right | Key::Home | Key::End => {
-                if let Some(te) = &mut self.text_edit {
-                    let len = match self.doc.get(te.id).map(|n| &n.kind) {
-                        Some(NodeKind::Text { text, .. }) => text.chars().count(),
-                        _ => 0,
-                    };
-                    te.caret = match key {
-                        Key::Left => te.caret.saturating_sub(1),
-                        Key::Right => (te.caret + 1).min(len),
-                        Key::Home => 0,
-                        _ => len,
-                    };
-                }
-                true
-            }
-            Key::Space | Key::Char(_) | Key::Up | Key::Down | Key::Tab => true,
-        }
-    }
-
     // ------------------------------------------------------------------ keyboard
 
     fn key_down(&mut self, key: Key, repeat: bool) {
-        if self.text_edit.is_some() && !(self.mods.command() && matches!(key, Key::Char(_))) {
+        let cmd_char = self.mods.command() && matches!(key, Key::Char(_));
+        let select_all = self.mods.command() && matches!(key, Key::Char('a' | 'A'));
+        if self.text_edit.is_some() && (!cmd_char || select_all) {
             self.text_key(&key);
             return;
+        }
+        if self.pen.is_some() && matches!(key, Key::Enter | Key::Escape) {
+            self.finish_pen();
+            return;
+        }
+        if self.path_edit.is_some() {
+            match key {
+                Key::Enter | Key::Escape => {
+                    self.path_edit = None;
+                    return;
+                }
+                Key::Delete | Key::Backspace if self.delete_path_point() => return,
+                _ => {}
+            }
         }
         if let Some(action) = shortcuts::lookup(&key, self.mods) {
             if !repeat || action.repeatable() {
@@ -1399,6 +1633,8 @@ impl Editor {
         match action {
             A::Tool(t) => {
                 self.end_text_edit();
+                self.finish_pen();
+                self.path_edit = None;
                 self.tool = t;
             }
             A::Escape => {
@@ -1423,6 +1659,11 @@ impl Editor {
             A::EditText => {
                 if let [id] = self.selection[..] {
                     if matches!(
+                        self.doc.get(id).map(|n| &n.kind),
+                        Some(NodeKind::Path { .. })
+                    ) {
+                        self.start_path_edit(id);
+                    } else if matches!(
                         self.doc.get(id).map(|n| &n.kind),
                         Some(NodeKind::Text { .. })
                     ) {
@@ -1536,6 +1777,21 @@ impl Editor {
                 self.snapping = !self.snapping;
                 self.status = format!("Snapping {}", if self.snapping { "on" } else { "off" });
             }
+            A::Group => self.group_selection(),
+            A::Ungroup => self.ungroup_selection(),
+            A::CreateComponent => self.create_component(),
+            A::DetachInstance => self.detach_instance(),
+            A::AddAutoLayout => self.add_auto_layout(),
+            A::RemoveAutoLayout => self.remove_auto_layout(),
+            A::Align(axis, to) => self.align(axis as usize, to),
+            A::Distribute(axis) => self.distribute(axis as usize),
+            A::Boolean(op) => self.boolean(op),
+            A::Flatten => self.flatten_selection(),
+            A::Bold => self.toggle_bold(),
+            A::Italic => self.toggle_italic(),
+            A::Underline => self.toggle_underline(),
+            A::Strikethrough => self.toggle_strike(),
+            A::PlaceImage => self.requests.push(AppRequest::PlaceImage),
         }
     }
 
@@ -1545,6 +1801,7 @@ impl Editor {
             | Gesture::Resize { .. }
             | Gesture::Create { .. }
             | Gesture::Draw { .. }
+            | Gesture::PathPart { .. }
             | Gesture::Erase => {
                 // Roll back the open transaction.
                 if let Some((rec, key)) = self.rec.take() {
@@ -1559,6 +1816,7 @@ impl Editor {
         }
         self.guides.clear();
         self.marquee = None;
+        self.layout_suspended.clear();
     }
 
     pub fn zoom_step(&mut self, up: bool) {
@@ -1710,6 +1968,36 @@ impl Editor {
 
     // ------------------------------------------------------------------ programmatic API
 
+    /// Place a registered image as a rectangle with an image fill, centered at `at` (world),
+    /// at its natural size up to 1000 px on the long side.
+    pub fn insert_image(&mut self, asset: &str, at: V2) -> Option<NodeId> {
+        let a = crate::assets::get(asset)?;
+        let (w, h) = (a.width as f64, a.height as f64);
+        let s = (1000.0 / w.max(h)).min(1.0);
+        let (w, h) = ((w * s).round(), (h * s).round());
+        let parent = self.frame_at(at, &[]);
+        let o = self.doc.parent_origin(parent);
+        let mut n = Node::new(
+            NodeId(0),
+            NodeKind::Rect,
+            Rect::new(
+                (at.x - w * 0.5).round() - o.x,
+                (at.y - h * 0.5).round() - o.y,
+                w,
+                h,
+            ),
+        );
+        n.name = "Image".into();
+        n.style.fills = vec![crate::model::Paint::Image {
+            asset: asset.into(),
+            mode: crate::model::ImageMode::Fill,
+            opacity: 1.0,
+        }];
+        let id = self.add_node(n, parent);
+        self.selection = vec![id];
+        Some(id)
+    }
+
     /// Add a node at world position (used by tests, demos and the properties panel).
     pub fn add_node(&mut self, mut node: Node, parent: Option<NodeId>) -> NodeId {
         let label = format!("Add {}", node.kind.type_name().to_lowercase());
@@ -1723,6 +2011,12 @@ impl Editor {
         self.commit();
         id
     }
+}
+
+/// A fresh process-wide document stamp.
+pub fn next_stamp() -> u64 {
+    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    N.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 fn is_desc(nodes: &[Node], id: NodeId, ancestor: NodeId) -> bool {

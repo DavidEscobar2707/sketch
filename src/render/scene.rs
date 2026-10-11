@@ -99,6 +99,9 @@ struct Entry {
 #[derive(Default)]
 pub struct SceneCache {
     entries: HashMap<NodeId, Entry>,
+    /// Item list of the previous frame and what it was built for (doc stamp, zoom bucket,
+    /// culled world rect): reused while the view stays inside that rect.
+    last: Option<(u64, i32, Rect, Vec<Item>)>,
     /// Tessellations performed during the last `items` call (for tests and profiling).
     pub last_misses: usize,
 }
@@ -111,6 +114,7 @@ pub fn zoom_bucket(zoom: f64) -> i32 {
 impl SceneCache {
     pub fn clear(&mut self) {
         self.entries.clear();
+        self.last = None;
     }
 
     /// Items for `roots` (or the whole page) in paint order. `cull` skips subtrees outside a
@@ -398,7 +402,7 @@ pub fn overlay(mb: &mut MeshBuilder, ed: &Editor, offset: V2) {
     }
 
     let guide = rgba(GUIDE);
-    for g in &ed.guides {
+    for g in ed.guides.iter().chain(&ed.measures) {
         match *g {
             Guide::V { x, y0, y1 } => {
                 mb.line(v.to_screen(v2(x, y0)), v.to_screen(v2(x, y1)), 1.0, guide)
@@ -406,9 +410,93 @@ pub fn overlay(mb: &mut MeshBuilder, ed: &Editor, offset: V2) {
             Guide::H { y, x0, x1 } => {
                 mb.line(v.to_screen(v2(x0, y)), v.to_screen(v2(x1, y)), 1.0, guide)
             }
+            Guide::Gap { a, b } => gap_guide(mb, &v, a, b, guide),
         }
     }
+    vector_edit_overlay(mb, ed, &v, accent);
     mb.set_clip(None);
+}
+
+/// A measured distance: line with end ticks and a pill showing the length.
+fn gap_guide(mb: &mut MeshBuilder, v: &View, a: V2, b: V2, color: [f32; 4]) {
+    let (sa, sb) = (v.to_screen(a), v.to_screen(b));
+    mb.line(sa, sb, 1.0, color);
+    let n = (sb - sa).normalized().perp() * 4.0;
+    mb.line(sa - n, sa + n, 1.0, color);
+    mb.line(sb - n, sb + n, 1.0, color);
+    let label = fmt_num(a.dist(b));
+    let w = text::layout(&label, 11.0, None, TextAlign::Left).width;
+    let c = (sa + sb) * 0.5;
+    let horizontal = (sb.x - sa.x).abs() >= (sb.y - sa.y).abs();
+    let pill = if horizontal {
+        Rect::new(c.x - w * 0.5 - 4.0, c.y + 4.0, w + 8.0, 16.0)
+    } else {
+        Rect::new(c.x + 6.0, c.y - 8.0, w + 8.0, 16.0)
+    };
+    mb.fill_path(
+        &MeshBuilder::rounded_rect_path(pill, 3.0),
+        color,
+        FillRule::NonZero,
+    );
+    draw_text(
+        mb,
+        &label,
+        11.0,
+        None,
+        TextAlign::Left,
+        v2(pill.x + 4.0, pill.y + 1.0),
+        1.0,
+        [1.0; 4],
+    );
+}
+
+/// Anchors and handles while drawing with the pen or editing a path.
+fn vector_edit_overlay(mb: &mut MeshBuilder, ed: &Editor, v: &View, accent: [f32; 4]) {
+    let (id, selected, pen) = match (&ed.pen, &ed.path_edit) {
+        (Some(p), _) => (p.id, None, true),
+        (None, Some(pe)) => (pe.id, pe.selected, false),
+        _ => return,
+    };
+    let (Some(n), Some(wr)) = (ed.doc.get(id), ed.doc.world_rect(id)) else {
+        return;
+    };
+    let NodeKind::Path { subpaths, .. } = &n.kind else {
+        return;
+    };
+    let s = |p: V2| v.to_screen(wr.min() + p);
+    // Path outline in accent so it stays visible over any fill.
+    let path = crate::vector::from_subpaths(wr.min(), subpaths).map(|p| v.to_screen(p));
+    mb.stroke_path(&path.to_lyon(), 1.0, accent, LineCap::Round);
+    for (si, sp) in subpaths.iter().enumerate() {
+        let last = sp.points.len().saturating_sub(1);
+        for (pi, pt) in sp.points.iter().enumerate() {
+            let show_handles = selected == Some((si, pi)) || (pen && pi == last);
+            if show_handles {
+                for h in [pt.h_in, pt.h_out].into_iter().flatten() {
+                    mb.line(s(pt.p), s(h), 1.0, accent);
+                    mb.circle(s(h), 3.5, accent);
+                    mb.circle(s(h), 2.0, [1.0; 4]);
+                }
+            }
+            let c = s(pt.p);
+            let r = Rect::new(c.x - 3.5, c.y - 3.5, 7.0, 7.0);
+            let sel = selected == Some((si, pi));
+            mb.rect(r, if sel { accent } else { [1.0; 4] });
+            mb.rect_outline(r, 1.0, accent);
+        }
+    }
+    // Rubber band from the last pen point to the pointer.
+    if pen
+        && !ed.is_busy()
+        && let Some(last) = subpaths.first().and_then(|sp| sp.points.last())
+    {
+        mb.line(
+            s(last.p),
+            ed.pointer + v.offset,
+            1.0,
+            [accent[0], accent[1], accent[2], 0.6],
+        );
+    }
 }
 
 fn outline_node(mb: &mut MeshBuilder, v: &View, id: NodeId, sr: Rect, color: [f32; 4], w: f64) {
@@ -462,8 +550,21 @@ pub fn canvas(ed: &Editor, cache: &mut SceneCache, offset: V2, show_grid: bool) 
         grid(&mut under, &v);
     }
     let vis = ed.camera.visible_world(ed.viewport);
-    let cull = vis.inflate(vis.w.max(vis.h) * 0.5);
-    let items = cache.items(&ed.doc, None, ed.camera.zoom, Some(cull));
+    let bucket = zoom_bucket(ed.camera.zoom);
+    let items = match &cache.last {
+        Some((stamp, b, cull, items))
+            if *stamp == ed.doc_stamp && *b == bucket && cull.contains_rect(&vis) =>
+        {
+            cache.last_misses = 0;
+            items.clone()
+        }
+        _ => {
+            let cull = vis.inflate(vis.w.max(vis.h) * 0.5);
+            let items = cache.items(&ed.doc, None, ed.camera.zoom, Some(cull));
+            cache.last = Some((ed.doc_stamp, bucket, cull, items.clone()));
+            items
+        }
+    };
     let mut over = MeshBuilder::default();
     overlay(&mut over, ed, offset);
     CanvasFrame {
