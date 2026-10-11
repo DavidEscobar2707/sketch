@@ -49,6 +49,7 @@ impl Editor {
         let clipboard = std::mem::take(&mut self.clipboard);
         let clipboard_roots = std::mem::take(&mut self.clipboard_roots);
         let clipboard_page = self.clipboard_page.take();
+        let clipboard_world = std::mem::take(&mut self.clipboard_world);
         let first = pages[active_i].clone();
         let doc = Document {
             name: first.name.clone(),
@@ -58,6 +59,7 @@ impl Editor {
         self.clipboard = clipboard;
         self.clipboard_roots = clipboard_roots;
         self.clipboard_page = clipboard_page;
+        self.clipboard_world = clipboard_world;
         self.pages = pages
             .into_iter()
             .enumerate()

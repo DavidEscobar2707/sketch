@@ -225,6 +225,26 @@ pub enum NodeKind {
         points: u32,
         inner: f64,
     },
+    /// Arrow or connector line; ends may bind to other layers and follow them.
+    Connector {
+        /// Node-local points (at least two).
+        points: Vec<V2>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        start: Option<Binding>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        end: Option<Binding>,
+        #[serde(default)]
+        route: Route,
+        #[serde(default)]
+        start_head: Head,
+        #[serde(default = "arrow_head")]
+        end_head: Head,
+    },
+    /// Sticky note: a colored square whose text wraps inside it.
+    Sticky {
+        text: String,
+        font_size: f64,
+    },
     /// Freehand ink. Points are node-local; the outline is computed on render.
     Stroke {
         points: Vec<StrokePoint>,
@@ -239,11 +259,91 @@ pub enum NodeKind {
 fn yes() -> bool {
     true
 }
+fn arrow_head() -> Head {
+    Head::Arrow
+}
+
+/// How a connector's line is drawn between its points.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Route {
+    #[default]
+    Straight,
+    /// Smooth curve through the points.
+    Curved,
+    /// Orthogonal segments routed around the bound shapes.
+    Elbow,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Head {
+    #[default]
+    None,
+    Arrow,
+    Triangle,
+    Dot,
+    Bar,
+    Diamond,
+}
+
+impl Head {
+    pub const ALL: [Head; 6] = [
+        Head::None,
+        Head::Arrow,
+        Head::Triangle,
+        Head::Dot,
+        Head::Bar,
+        Head::Diamond,
+    ];
+    pub fn label(self) -> &'static str {
+        match self {
+            Head::None => "None",
+            Head::Arrow => "Arrow",
+            Head::Triangle => "Triangle",
+            Head::Dot => "Dot",
+            Head::Bar => "Bar",
+            Head::Diamond => "Diamond",
+        }
+    }
+}
+
+/// A connector end attached to another layer.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Binding {
+    pub node: NodeId,
+    /// Attachment point as a fraction of the target's box (0..1 inside it).
+    pub fixed: V2,
+    /// Inside: the end sits exactly on the fixed point. Otherwise it stops at the outline.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub inside: bool,
+}
 fn default_thinning() -> f64 {
     0.6
 }
 
 impl NodeKind {
+    /// Editable text content (text layers and sticky notes).
+    pub fn text(&self) -> Option<&String> {
+        match self {
+            NodeKind::Text { text, .. } | NodeKind::Sticky { text, .. } => Some(text),
+            _ => None,
+        }
+    }
+    pub fn text_mut(&mut self) -> Option<&mut String> {
+        match self {
+            NodeKind::Text { text, .. } | NodeKind::Sticky { text, .. } => Some(text),
+            _ => None,
+        }
+    }
+    pub fn font_size(&self) -> Option<f64> {
+        match self {
+            NodeKind::Text { font_size, .. } | NodeKind::Sticky { font_size, .. } => {
+                Some(*font_size)
+            }
+            _ => None,
+        }
+    }
     pub fn type_name(&self) -> &'static str {
         match self {
             NodeKind::Frame { .. } => "Frame",
@@ -256,6 +356,8 @@ impl NodeKind {
             NodeKind::Path { .. } => "Vector",
             NodeKind::Polygon { .. } => "Polygon",
             NodeKind::Star { .. } => "Star",
+            NodeKind::Connector { .. } => "Arrow",
+            NodeKind::Sticky { .. } => "Sticky",
         }
     }
 }
@@ -348,6 +450,12 @@ impl Node {
             },
             NodeKind::Text { .. } | NodeKind::Stroke { .. } => Style::with_fill(Color::INK),
             NodeKind::Group => Style::default(),
+            NodeKind::Connector { .. } => Style {
+                stroke: Some(Color::INK),
+                stroke_width: 2.0,
+                ..Style::default()
+            },
+            NodeKind::Sticky { .. } => Style::with_fill(Color::rgb(0xff, 0xdf, 0x6b)),
         };
         Node {
             id,
@@ -405,6 +513,12 @@ impl Node {
                 a.y *= sy;
                 b.x *= sx;
                 b.y *= sy;
+            }
+            NodeKind::Connector { points, .. } => {
+                for p in points.iter_mut() {
+                    p.x *= sx;
+                    p.y *= sy;
+                }
             }
             NodeKind::Path { subpaths, .. } => {
                 let sc = |v: &mut V2| {

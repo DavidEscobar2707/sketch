@@ -69,6 +69,7 @@ impl App {
         let ctx = egui::Context::default();
         theme::set_accent(theme::system_accent());
         ui::setup_style(&ctx);
+        let library = crate::library::Library::load(&crate::library::Library::path_in(&store.root));
         let mut app = App {
             gfx: None,
             ed: Editor::default(),
@@ -83,6 +84,7 @@ impl App {
             #[cfg(target_os = "macos")]
             menu: None,
         };
+        app.st.library.library = library;
         match start {
             Start::Home => app.show_home(),
             Start::Project(dir) => {
@@ -448,6 +450,8 @@ impl App {
     }
 
     fn redraw(&mut self) {
+        let now = self.now();
+        self.ed.tick(now);
         let Some(g) = self.gfx.as_mut() else { return };
         let input = g.egui.take_egui_input(&g.window);
         let mut l = frame::layout(&self.ctx, input, &mut self.ed, &mut self.st);
@@ -527,6 +531,12 @@ impl App {
         self.handle_requests();
         self.handle_home_actions();
         self.tick_autosave();
+        if self.st.library.dirty {
+            self.st.library.dirty = false;
+            if let Err(e) = self.st.library.library.save() {
+                self.error(format!("Could not save the library: {e}"));
+            }
+        }
         self.sync_menu();
         // Repaint only when egui wants it: immediately (an animation is running or state just
         // changed), after a delay (tooltip, caret blink), or never (idle; input wakes us).
@@ -537,7 +547,9 @@ impl App {
                 self.ctx.repaint_causes()
             );
         }
-        if repaint_delay.is_zero() || pending || !self.ed.requests.is_empty() {
+        // The laser trail fades out frame by frame, then the loop goes idle again.
+        let animating = self.ed.animating(now);
+        if repaint_delay.is_zero() || pending || animating || !self.ed.requests.is_empty() {
             g.window.request_redraw();
             self.next_repaint = None;
         } else if repaint_delay < Duration::from_secs(3600) {

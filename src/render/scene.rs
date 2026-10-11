@@ -339,7 +339,7 @@ pub fn overlay(mb: &mut MeshBuilder, ed: &Editor, offset: V2) {
         if let (Some(n), Some(wr)) = (ed.doc.get(te.id), ed.doc.world_rect(te.id))
             && let Some(l) = text::layout_node(n)
         {
-            let o = v.to_screen(wr.min());
+            let o = v.to_screen(wr.min() + text::text_offset(n));
             if let Some(a) = te.anchor.filter(|a| *a != te.caret) {
                 for (x, top, w, h) in l.selection_rects(a, te.caret) {
                     mb.rect(
@@ -414,7 +414,57 @@ pub fn overlay(mb: &mut MeshBuilder, ed: &Editor, offset: V2) {
         }
     }
     vector_edit_overlay(mb, ed, &v, accent);
+    whiteboard_overlay(mb, ed, &v, accent);
     mb.set_clip(None);
+}
+
+/// Arrow handles, bind targets, quick-connect knobs and the laser trail.
+fn whiteboard_overlay(mb: &mut MeshBuilder, ed: &Editor, v: &View, accent: [f32; 4]) {
+    let off = v.offset;
+    if let Some(t) = ed.bind_hover
+        && let Some(wr) = ed.doc.world_rect(t)
+    {
+        let n = ed.doc.get(t).unwrap();
+        let path = draw::shape_path(n, wr.inflate(4.0 / v.camera.zoom))
+            .unwrap_or_else(|| crate::vector::rounded_rect(wr, [0.0; 4]));
+        let sp = path.map(|p| v.to_screen(p));
+        mb.stroke_path(
+            &sp.to_lyon(),
+            3.0,
+            [accent[0], accent[1], accent[2], 0.45],
+            LineCap::Round,
+        );
+    }
+    for (end, p) in ed.connector_handles() {
+        let p = p + off;
+        if end == 2 {
+            mb.circle(p, 4.0, [accent[0], accent[1], accent[2], 0.5]);
+        } else {
+            mb.circle(p, 5.5, accent);
+            mb.circle(p, 4.0, [1.0; 4]);
+        }
+    }
+    for (_, p) in ed.quick_knobs() {
+        let p = p + off;
+        mb.circle(p, 8.0, [accent[0], accent[1], accent[2], 0.9]);
+        mb.line(p - v2(4.0, 0.0), p + v2(4.0, 0.0), 1.6, [1.0; 4]);
+        mb.line(p - v2(0.0, 4.0), p + v2(0.0, 4.0), 1.6, [1.0; 4]);
+    }
+    let trail = ed.laser_trail(ed.now_ms);
+    if trail.len() >= 2 {
+        let red = [0.98, 0.18, 0.2, 1.0];
+        for w in trail.windows(2) {
+            let (a, ka) = w[0];
+            let (b, kb) = w[1];
+            let width = 4.0 * (ka + kb) * 0.5;
+            mb.line(v.to_screen(a), v.to_screen(b), width, red);
+            mb.circle(v.to_screen(b), width * 0.5, red);
+        }
+        let (head, _) = *trail.last().unwrap();
+        mb.circle(v.to_screen(head), 3.5, [1.0, 0.6, 0.6, 1.0]);
+    } else if let Some((p, _)) = trail.first() {
+        mb.circle(v.to_screen(*p), 3.0, [0.98, 0.18, 0.2, 1.0]);
+    }
 }
 
 /// A measured distance: line with end ticks and a pill showing the length.

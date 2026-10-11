@@ -291,6 +291,13 @@ impl Editor {
                 layout::layout_frame(&mut tx, r);
             }
         }
+        // 4. Arrows bound to anything that moved follow it.
+        let touched: HashSet<NodeId> = self
+            .rec
+            .as_ref()
+            .map(|(r, _)| r.touched().iter().copied().collect())
+            .unwrap_or_default();
+        self.reroute_connectors(&touched);
     }
 
     /// Record that `prop` was explicitly changed on nodes inside instances.

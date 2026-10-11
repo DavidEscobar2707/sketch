@@ -97,6 +97,11 @@ pub fn shape_path(n: &Node, wr: Rect) -> Option<VPath> {
             let pts: Vec<V2> = o.iter().map(|q| wr.min() + *q).collect();
             VPath::polyline(&pts, true)
         }
+        NodeKind::Connector { points, route, .. } => {
+            let pts: Vec<V2> = points.iter().map(|p| wr.min() + *p).collect();
+            crate::connector::line_path(&pts, *route)
+        }
+        NodeKind::Sticky { .. } => vector::rounded_rect(wr, [n.style.corner_radius.max(2.0); 4]),
         NodeKind::Text { .. } | NodeKind::Group => return None,
     })
 }
@@ -105,7 +110,10 @@ pub fn shape_path(n: &Node, wr: Rect) -> Option<VPath> {
 pub fn is_area(n: &Node) -> bool {
     !matches!(
         n.kind,
-        NodeKind::Line { .. } | NodeKind::Text { .. } | NodeKind::Group
+        NodeKind::Line { .. }
+            | NodeKind::Text { .. }
+            | NodeKind::Group
+            | NodeKind::Connector { .. }
     ) && !matches!(&n.kind, NodeKind::Path { subpaths, .. } if subpaths.iter().all(|s| !s.closed))
 }
 
@@ -228,6 +236,41 @@ pub fn node_draw(n: &Node, wr: Rect, opacity: f64) -> NodeDraw {
     match &n.kind {
         NodeKind::Group => {}
         NodeKind::Text { .. } => text_ops(n, wr, opacity, &mut ops),
+        NodeKind::Connector { .. } => connector_ops(n, wr, opacity, &mut ops, false),
+        NodeKind::Sticky { .. } => {
+            let c = n
+                .style
+                .fills
+                .last()
+                .map_or(Color::rgb(0xff, 0xdf, 0x6b), |p| p.preview_color());
+            let rad = [n.style.corner_radius.max(2.0); 4];
+            // Soft drop shadow, then the note and its text.
+            for (i, a) in [(3.0, 0.05), (1.5, 0.07)] {
+                ops.push(DrawOp::Fill {
+                    path: vector::rounded_rect(wr.translate(v2(0.0, i)).inflate(i * 0.5), rad),
+                    paint: PaintSpec::Solid(rgba(Color::rgba(0, 0, 0, (a * 255.0) as u8), opacity)),
+                    even_odd: false,
+                });
+            }
+            ops.push(DrawOp::Fill {
+                path: vector::rounded_rect(wr, rad),
+                paint: PaintSpec::Solid(rgba(c, opacity)),
+                even_odd: false,
+            });
+            if let Some(sc) = n.style.stroke
+                && n.style.stroke_width > 0.0
+            {
+                ops.push(DrawOp::Stroke {
+                    path: vector::rounded_rect(wr, rad),
+                    color: rgba(sc, opacity),
+                    width: n.style.stroke_width,
+                    cap: n.style.cap,
+                    join: n.style.join,
+                    dash: n.style.dash.clone(),
+                });
+            }
+            text_ops(n, wr, opacity, &mut ops);
+        }
         NodeKind::Line { .. } => {
             if let (Some(c), Some(path)) = (n.style.stroke, shape_path(n, wr)) {
                 ops.push(DrawOp::Stroke {
@@ -301,11 +344,76 @@ pub fn node_draw(n: &Node, wr: Rect, opacity: f64) -> NodeDraw {
     }
 }
 
+/// A connector's line and heads. With `rough`, only the heads are produced (the line comes
+/// from the rough renderer).
+pub fn connector_ops(n: &Node, wr: Rect, opacity: f64, ops: &mut Vec<DrawOp>, heads_only: bool) {
+    let NodeKind::Connector {
+        points,
+        route,
+        start_head,
+        end_head,
+        ..
+    } = &n.kind
+    else {
+        return;
+    };
+    let Some(c) = n.style.stroke else { return };
+    let color = rgba(c, opacity);
+    let sw = n.style.stroke_width.max(0.5);
+    let pts: Vec<V2> = points.iter().map(|p| wr.min() + *p).collect();
+    if pts.len() < 2 {
+        return;
+    }
+    if !heads_only {
+        ops.push(DrawOp::Stroke {
+            path: crate::connector::line_path(&pts, *route),
+            color,
+            width: sw,
+            cap: Cap::Round,
+            join: Join::Round,
+            dash: n.style.dash.clone(),
+        });
+    }
+    let last = pts.len() - 1;
+    for (head, tip, from) in [
+        (*start_head, pts[0], pts[1]),
+        (*end_head, pts[last], pts[last - 1]),
+    ] {
+        let (lines, polys) = crate::connector::head_shapes(head, tip, from, sw, tip.dist(from));
+        for l in lines {
+            ops.push(DrawOp::Stroke {
+                path: VPath::polyline(&l, false),
+                color,
+                width: sw,
+                cap: Cap::Round,
+                join: Join::Round,
+                dash: Vec::new(),
+            });
+        }
+        for p in polys {
+            let path = VPath::polyline(&p, true);
+            ops.push(DrawOp::Fill {
+                path: path.clone(),
+                paint: PaintSpec::Solid(color),
+                even_odd: false,
+            });
+            ops.push(DrawOp::Stroke {
+                path,
+                color,
+                width: sw,
+                cap: Cap::Round,
+                join: Join::Round,
+                dash: Vec::new(),
+            });
+        }
+    }
+}
+
 fn text_ops(n: &Node, wr: Rect, opacity: f64, ops: &mut Vec<DrawOp>) {
     let Some(l) = text::layout_node(n) else {
         return;
     };
-    let o = wr.min();
+    let o = wr.min() + text::text_offset(n);
     let mut i = 0;
     while i < l.glyphs.len() {
         let g0 = l.glyphs[i];
@@ -365,6 +473,13 @@ pub fn draw_bounds(n: &Node, wr: Rect) -> Rect {
     }
     if matches!(n.kind, NodeKind::Line { .. }) {
         pad = pad.max(n.style.stroke_width * 0.5);
+    }
+    if matches!(n.kind, NodeKind::Connector { .. }) {
+        // Arrowheads reach past the end points.
+        pad = pad.max(n.style.stroke_width + 20.0);
+    }
+    if matches!(n.kind, NodeKind::Sticky { .. }) {
+        pad = pad.max(4.0);
     }
     wr.inflate(pad)
 }

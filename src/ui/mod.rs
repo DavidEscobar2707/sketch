@@ -3,6 +3,7 @@
 
 pub mod home;
 pub mod inspector;
+pub mod library;
 pub mod pages;
 
 use crate::editor::shortcuts::{self, Action};
@@ -32,6 +33,9 @@ pub struct UiState {
     /// Autosave state for the toolbar subtitle, e.g. "Saved" or "Saving…".
     pub save_state: String,
     pub pages: pages::PagesUi,
+    pub library: library::LibraryUi,
+    /// Left sidebar shows the library instead of the layers.
+    pub show_library: bool,
 }
 
 pub fn setup_style(ctx: &egui::Context) {
@@ -290,8 +294,25 @@ fn layers(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
         egui::Stroke::new(1.0, theme::pal(ui).separator),
     );
     ui.add_space(6.0);
+    let p = theme::pal(ui);
     ui.horizontal(|ui| {
-        section(ui, "Layers");
+        for (lib, label) in [(false, "Layers"), (true, "Library")] {
+            let on = st.show_library == lib;
+            let r = ui.add(
+                egui::Label::new(
+                    RichText::new(label)
+                        .font(theme::semibold(theme::SECONDARY))
+                        .color(if on { p.text } else { p.secondary }),
+                )
+                .sense(egui::Sense::click()),
+            );
+            if r.clicked() {
+                st.show_library = lib;
+            }
+        }
+        if st.show_library {
+            return;
+        }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
             let some = !ed.selection.is_empty();
@@ -312,6 +333,10 @@ fn layers(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
         });
     });
     ui.add_space(2.0);
+    if st.show_library {
+        library::panel(ui, ed, st);
+        return;
+    }
     egui::ScrollArea::vertical()
         .auto_shrink(false)
         .show(ui, |ui| {
@@ -351,6 +376,8 @@ fn node_icon(n: &crate::model::Node) -> Icon {
 fn kind_icon(k: &NodeKind) -> Icon {
     match k {
         NodeKind::Group => Icon::Group,
+        NodeKind::Connector { .. } => Icon::Arrow,
+        NodeKind::Sticky { .. } => Icon::Sticky,
         NodeKind::Path { .. } => Icon::Pen,
         NodeKind::Polygon { .. } => Icon::Polygon,
         NodeKind::Star { .. } => Icon::Star,
@@ -546,6 +573,10 @@ fn tool_icon(t: Tool) -> Icon {
         Tool::Rect => Icon::Rect,
         Tool::Ellipse => Icon::Ellipse,
         Tool::Polygon => Icon::Polygon,
+        Tool::Diamond => Icon::Diamond,
+        Tool::Arrow => Icon::Arrow,
+        Tool::Sticky => Icon::Sticky,
+        Tool::Laser => Icon::Laser,
         Tool::Star => Icon::Star,
         Tool::Pen => Icon::Pen,
         Tool::Line => Icon::Line,
@@ -570,7 +601,7 @@ fn toolbar(ctx: &egui::Context, ed: &mut Editor, canvas: egui::Rect) {
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 2.0;
                         for t in Tool::ALL {
-                            if matches!(t, Tool::Frame | Tool::Text) {
+                            if matches!(t, Tool::Frame | Tool::Line | Tool::Text | Tool::Pencil) {
                                 let (r, _) = ui.allocate_exact_size(
                                     egui::vec2(9.0, 28.0),
                                     egui::Sense::hover(),
@@ -636,14 +667,4 @@ fn help(ctx: &egui::Context, st: &mut UiState) {
                 });
         });
     st.show_help = open;
-}
-
-/// Hand-drawn style controls (filled in with the Excalidraw milestone).
-pub(crate) fn sketch_section(
-    _ui: &mut Ui,
-    _ed: &mut Editor,
-    _ids: &[NodeId],
-    _first: &crate::model::Node,
-    _st: &mut UiState,
-) {
 }

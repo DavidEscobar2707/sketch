@@ -10,6 +10,7 @@ pub mod snap;
 pub mod structure;
 pub mod text_edit;
 pub mod vector_ops;
+pub mod whiteboard;
 
 use crate::geom::{Camera, Rect, V2, next_zoom_step, v2};
 use crate::history::{History, Recording, Tx};
@@ -30,27 +31,35 @@ pub enum Tool {
     Ellipse,
     Polygon,
     Star,
+    Diamond,
     Line,
+    Arrow,
     Pen,
     Text,
+    Sticky,
     Pencil,
     Eraser,
+    Laser,
 }
 
 impl Tool {
-    pub const ALL: [Tool; 12] = [
+    pub const ALL: [Tool; 16] = [
         Tool::Select,
         Tool::Hand,
         Tool::Frame,
         Tool::Rect,
         Tool::Ellipse,
+        Tool::Diamond,
         Tool::Polygon,
         Tool::Star,
         Tool::Line,
+        Tool::Arrow,
         Tool::Pen,
         Tool::Text,
+        Tool::Sticky,
         Tool::Pencil,
         Tool::Eraser,
+        Tool::Laser,
     ];
     pub fn label(self) -> &'static str {
         match self {
@@ -61,11 +70,15 @@ impl Tool {
             Tool::Ellipse => "Ellipse",
             Tool::Polygon => "Polygon",
             Tool::Star => "Star",
+            Tool::Diamond => "Diamond",
             Tool::Line => "Line",
+            Tool::Arrow => "Arrow",
             Tool::Pen => "Pen",
             Tool::Text => "Text",
+            Tool::Sticky => "Sticky note",
             Tool::Pencil => "Pencil",
             Tool::Eraser => "Eraser",
+            Tool::Laser => "Laser pointer",
         }
     }
     pub fn shortcut(self) -> &'static str {
@@ -77,11 +90,15 @@ impl Tool {
             Tool::Ellipse => "O",
             Tool::Polygon => "⇧Y",
             Tool::Star => "⇧S",
+            Tool::Diamond => "D",
             Tool::Line => "L",
+            Tool::Arrow => "⇧L",
             Tool::Pen => "P",
             Tool::Text => "T",
+            Tool::Sticky => "S",
             Tool::Pencil => "⇧P",
             Tool::Eraser => "E",
+            Tool::Laser => "K",
         }
     }
 }
@@ -159,6 +176,17 @@ enum Gesture {
     TextSelect {
         id: NodeId,
     },
+    /// Dragging an arrow end (new arrows too); `start` is the press position.
+    ConnectorEnd {
+        id: NodeId,
+        end: usize,
+        start: V2,
+    },
+    /// Bending an arrow by its middle point.
+    ConnectorMid {
+        id: NodeId,
+    },
+    Laser,
     /// Dragging a point or handle of the path being edited.
     PathPart {
         si: usize,
@@ -198,6 +226,8 @@ pub struct Editor {
     clipboard_roots: Vec<NodeId>,
     /// Page the clipboard was copied from; pasting elsewhere keeps positions.
     clipboard_page: Option<String>,
+    /// World rects of the clipboard roots at copy time.
+    clipboard_world: Vec<Rect>,
     gesture: Gesture,
     rec: Option<(Recording, Option<String>)>,
     saved_marker: Option<usize>,
@@ -222,6 +252,17 @@ pub struct Editor {
     pub path_edit: Option<vector_ops::PathEdit>,
     /// Alt-hover distance measurements (world space).
     pub measures: Vec<Guide>,
+    /// Shape an arrow end would bind to (highlighted while dragging).
+    pub bind_hover: Option<NodeId>,
+    /// Laser pointer trail: world points with the time they were added (ms).
+    pub laser: Vec<(V2, f64)>,
+    /// Latest input time (ms), for animations.
+    pub now_ms: f64,
+    /// Route for new arrows.
+    pub arrow_route: crate::model::Route,
+    /// Hand-drawn style for new shapes (None = clean lines).
+    pub sketch: Option<crate::model::rough::Rough>,
+    pub sticky_color: Color,
 }
 
 impl Default for Editor {
@@ -260,6 +301,7 @@ impl Editor {
             clipboard: Vec::new(),
             clipboard_roots: Vec::new(),
             clipboard_page: None,
+            clipboard_world: Vec::new(),
             gesture: Gesture::None,
             rec: None,
             saved_marker: Some(0),
@@ -274,6 +316,12 @@ impl Editor {
             pen: None,
             path_edit: None,
             measures: Vec::new(),
+            bind_hover: None,
+            laser: Vec::new(),
+            now_ms: 0.0,
+            arrow_route: crate::model::Route::Straight,
+            sketch: None,
+            sticky_color: Color::rgb(0xff, 0xdf, 0x6b),
         }
     }
 
@@ -387,6 +435,10 @@ impl Editor {
             clipboard: std::mem::take(&mut self.clipboard),
             clipboard_roots: std::mem::take(&mut self.clipboard_roots),
             clipboard_page: self.clipboard_page.take(),
+            clipboard_world: std::mem::take(&mut self.clipboard_world),
+            sketch: self.sketch,
+            arrow_route: self.arrow_route,
+            sticky_color: self.sticky_color,
             ..Editor::new(doc)
         };
         self.file_path = path;
@@ -646,7 +698,7 @@ impl Editor {
             }
             Tool::Text => {
                 if let Some(id) = hit::hit_test(&self.doc, world, self.camera.zoom)
-                    .filter(|id| matches!(self.doc.get(*id).unwrap().kind, NodeKind::Text { .. }))
+                    .filter(|id| self.doc.get(*id).unwrap().kind.text().is_some())
                 {
                     self.start_text_edit(id, Some(world));
                     return;
@@ -685,7 +737,19 @@ impl Editor {
                 self.pen_down(world, pos);
                 self.gesture = Gesture::Pen;
             }
-            Tool::Frame | Tool::Rect | Tool::Ellipse | Tool::Polygon | Tool::Star | Tool::Line => {
+            Tool::Arrow => self.arrow_down(if self.snapping { world.round() } else { world }),
+            Tool::Sticky => self.sticky_down(world),
+            Tool::Laser => {
+                self.laser_point(world, time_ms);
+                self.gesture = Gesture::Laser;
+            }
+            Tool::Frame
+            | Tool::Rect
+            | Tool::Ellipse
+            | Tool::Diamond
+            | Tool::Polygon
+            | Tool::Star
+            | Tool::Line => {
                 self.end_text_edit();
                 let label = format!("Add {}", self.tool.label().to_lowercase());
                 self.begin(&label);
@@ -697,6 +761,7 @@ impl Editor {
                     Tool::Rect => NodeKind::Rect,
                     Tool::Ellipse => NodeKind::Ellipse,
                     Tool::Polygon => NodeKind::Polygon { sides: 3 },
+                    Tool::Diamond => NodeKind::Polygon { sides: 4 },
                     Tool::Star => NodeKind::Star {
                         points: 5,
                         inner: 0.38,
@@ -707,6 +772,7 @@ impl Editor {
                     },
                 };
                 let frame_count = self.doc.nodes.values().filter(|n| n.is_frame()).count();
+                let sketch = self.sketch;
                 let id = {
                     let mut tx = self.tx();
                     let id = tx.alloc_id();
@@ -717,6 +783,14 @@ impl Editor {
                     );
                     if n.is_frame() {
                         n.name = format!("Frame {}", frame_count + 1);
+                    } else if let Some(r) = sketch {
+                        n.style.rough = Some(crate::model::rough::Rough {
+                            seed: (id.0 as u32).wrapping_mul(2654435761) | 1,
+                            ..r
+                        });
+                    }
+                    if matches!(n.kind, NodeKind::Polygon { sides: 4 }) {
+                        n.name = "Diamond".into();
                     }
                     tx.insert(n, parent, None)
                 };
@@ -731,6 +805,15 @@ impl Editor {
     }
 
     fn select_down(&mut self, pos: V2, world: V2, double: bool) {
+        if self.path_edit.is_none() && self.text_edit.is_none() {
+            if let Some(&(dir, _)) = self.quick_knobs().iter().find(|(_, p)| p.dist(pos) <= 9.0) {
+                self.quick_connect(dir);
+                return;
+            }
+            if self.connector_handle_down(pos, world) {
+                return;
+            }
+        }
         if self.path_edit.is_some() {
             if let Some((si, pi, part)) = self.path_part_at(pos) {
                 if double && part == vector_ops::PointPart::Anchor {
@@ -824,7 +907,7 @@ impl Editor {
             self.start_marquee(world, Some(target));
             return;
         }
-        if double && matches!(node.kind, NodeKind::Text { .. }) {
+        if double && node.kind.text().is_some() {
             self.start_text_edit(target, Some(world));
             return;
         }
@@ -1194,12 +1277,29 @@ impl Editor {
                 self.pen_drag(world);
                 self.gesture = Gesture::Pen;
             }
+            Gesture::ConnectorEnd { id, end, start } => {
+                let w = if self.snapping && !self.mods.command() {
+                    world.round()
+                } else {
+                    world
+                };
+                self.drag_connector_end(id, end, w);
+                self.gesture = Gesture::ConnectorEnd { id, end, start };
+            }
+            Gesture::ConnectorMid { id } => {
+                self.drag_connector_mid(id, world);
+                self.gesture = Gesture::ConnectorMid { id };
+            }
+            Gesture::Laser => {
+                self.laser_point(world, time_ms);
+                self.gesture = Gesture::Laser;
+            }
             Gesture::TextSelect { id } => {
                 if let (Some(n), Some(wr)) = (self.doc.get(id), self.doc.world_rect(id))
                     && let Some(l) = text::layout_node(n)
                     && let Some(te) = &mut self.text_edit
                 {
-                    te.caret = l.hit(world - wr.min());
+                    te.caret = l.hit(world - wr.min() - text::text_offset(n));
                 }
                 self.gesture = Gesture::TextSelect { id };
             }
@@ -1323,6 +1423,7 @@ impl Editor {
             }
             Gesture::Move { origins, .. } => {
                 let ids: Vec<NodeId> = origins.iter().map(|(id, _)| *id).collect();
+                self.unbind_moved_connectors(&ids);
                 self.drop_into_auto_layout(&ids);
                 self.layout_suspended.clear();
                 self.reparent_after_move(ids);
@@ -1369,6 +1470,9 @@ impl Editor {
             }
             Gesture::Erase => self.commit(),
             Gesture::Pen => self.pen_up(),
+            Gesture::ConnectorEnd { id, start, .. } => self.connector_end_up(id, start, world),
+            Gesture::ConnectorMid { .. } => self.commit(),
+            Gesture::Laser => {}
             Gesture::TextSelect { .. } => {
                 if let Some(te) = &mut self.text_edit
                     && te.anchor == Some(te.caret)
@@ -1401,6 +1505,33 @@ impl Editor {
         let mut tx = self.tx();
         for id in inside {
             tx.reparent(id, Some(frame), None);
+        }
+    }
+
+    /// A connector dragged on its own lets go of shapes that didn't move with it.
+    fn unbind_moved_connectors(&mut self, ids: &[NodeId]) {
+        let moved: std::collections::HashSet<NodeId> =
+            ids.iter().flat_map(|i| self.doc.subtree(*i)).collect();
+        let mut tx = self.tx();
+        for id in ids {
+            let Some(n) = tx.doc().get(*id) else { continue };
+            let NodeKind::Connector { start, end, .. } = &n.kind else {
+                continue;
+            };
+            let drop =
+                |b: &Option<crate::model::Binding>| b.is_some_and(|b| !moved.contains(&b.node));
+            let (ds, de) = (drop(start), drop(end));
+            if ds || de {
+                let n = tx.node_mut(*id).unwrap();
+                if let NodeKind::Connector { start, end, .. } = &mut n.kind {
+                    if ds {
+                        *start = None;
+                    }
+                    if de {
+                        *end = None;
+                    }
+                }
+            }
         }
     }
 
@@ -1521,13 +1652,13 @@ impl Editor {
 
     pub fn start_text_edit(&mut self, id: NodeId, at_world: Option<V2>) {
         let Some(n) = self.doc.get(id) else { return };
-        let NodeKind::Text { text: t, .. } = &n.kind else {
+        let Some(t) = n.kind.text() else {
             return;
         };
         let len = t.chars().count();
         let caret = match (at_world, text::layout_node(n)) {
             (Some(p), Some(l)) => {
-                let local = p - self.doc.world_rect(id).unwrap().min();
+                let local = p - self.doc.world_rect(id).unwrap().min() - text::text_offset(n);
                 l.hit(local)
             }
             _ => len,
@@ -1559,7 +1690,7 @@ impl Editor {
         let Some(te) = self.text_edit.clone() else {
             return;
         };
-        let Some(NodeKind::Text { text, .. }) = self.doc.get(te.id).map(|n| &n.kind) else {
+        let Some(text) = self.doc.get(te.id).and_then(|n| n.kind.text()) else {
             return;
         };
         let chars: Vec<char> = text.chars().collect();
@@ -1707,10 +1838,16 @@ impl Editor {
                     self.clipboard.clone(),
                     self.clipboard_roots.clone(),
                     self.clipboard_page.clone(),
+                    self.clipboard_world.clone(),
                 );
                 self.copy();
                 self.paste(v2(PASTE_OFFSET, PASTE_OFFSET));
-                (self.clipboard, self.clipboard_roots, self.clipboard_page) = saved;
+                (
+                    self.clipboard,
+                    self.clipboard_roots,
+                    self.clipboard_page,
+                    self.clipboard_world,
+                ) = saved;
             }
             A::Forward => self.reorder(|i, _| i + 1),
             A::Backward => self.reorder(|i, _| i.saturating_sub(1)),
@@ -1792,6 +1929,7 @@ impl Editor {
             A::Underline => self.toggle_underline(),
             A::Strikethrough => self.toggle_strike(),
             A::PlaceImage => self.requests.push(AppRequest::PlaceImage),
+            A::ToggleSketch => self.toggle_sketch(),
         }
     }
 
@@ -1802,6 +1940,8 @@ impl Editor {
             | Gesture::Create { .. }
             | Gesture::Draw { .. }
             | Gesture::PathPart { .. }
+            | Gesture::ConnectorEnd { .. }
+            | Gesture::ConnectorMid { .. }
             | Gesture::Erase => {
                 // Roll back the open transaction.
                 if let Some((rec, key)) = self.rec.take() {
@@ -1817,6 +1957,7 @@ impl Editor {
         self.guides.clear();
         self.marquee = None;
         self.layout_suspended.clear();
+        self.bind_hover = None;
     }
 
     pub fn zoom_step(&mut self, up: bool) {
@@ -1866,6 +2007,10 @@ impl Editor {
             .flat_map(|r| self.doc.subtree(*r))
             .filter_map(|id| self.doc.get(id).cloned())
             .collect();
+        self.clipboard_world = roots
+            .iter()
+            .map(|r| self.doc.world_rect(*r).unwrap_or_default())
+            .collect();
         self.clipboard_roots = roots;
         self.clipboard_page = Some(self.active_page_id().to_string());
         self.status = format!("Copied {} layer(s)", self.clipboard_roots.len());
@@ -1877,38 +2022,104 @@ impl Editor {
         }
         let nodes = self.clipboard.clone();
         let roots = self.clipboard_roots.clone();
-        let new_roots = self.edit("Paste", |tx| {
+        let same_page = self.clipboard_page.as_deref() == Some(self.active_page_id());
+        let world = self.clipboard_world.clone();
+        let new_roots = self.insert_subtrees("Paste", &nodes, &roots, &world, offset, same_page);
+        self.selection = new_roots;
+        self.status = format!("Pasted {} layer(s)", self.selection.len());
+    }
+
+    /// Insert copies of subtrees. `world[i]` is root `i`'s world rect; `same_page` keeps the
+    /// original parents and references to layers outside the copied set.
+    pub fn insert_subtrees(
+        &mut self,
+        label: &str,
+        nodes: &[Node],
+        roots: &[NodeId],
+        world: &[Rect],
+        offset: V2,
+        same_page: bool,
+    ) -> Vec<NodeId> {
+        self.edit(label, |tx| {
             let mut map = std::collections::HashMap::new();
-            for n in &nodes {
+            for n in nodes {
                 map.insert(n.id, tx.alloc_id());
             }
+            let remap = |c: &mut Node, map: &std::collections::HashMap<NodeId, NodeId>| {
+                if let NodeKind::Connector { start, end, .. } = &mut c.kind {
+                    for b in [start, end] {
+                        if let Some(bb) = b {
+                            match map.get(&bb.node) {
+                                Some(n) => bb.node = *n,
+                                None if same_page => {}
+                                None => *b = None,
+                            }
+                        }
+                    }
+                }
+                if let Some(l) = &mut c.instance {
+                    match map.get(&l.main) {
+                        Some(n) => l.main = *n,
+                        None if same_page => {}
+                        None => c.instance = None,
+                    }
+                }
+            };
             let mut new_roots = Vec::new();
-            for r in &roots {
-                let n = nodes.iter().find(|n| n.id == *r).unwrap();
-                // Paste next to the original if its parent still exists, else at the root.
-                let parent = n.parent.filter(|p| tx.doc().nodes.contains_key(p));
-                let world = n.rect.translate(tx.doc().parent_origin(n.parent));
+            for (i, r) in roots.iter().enumerate() {
+                let Some(n) = nodes.iter().find(|n| n.id == *r) else {
+                    continue;
+                };
+                // Same page: next to the original if its parent still exists. Elsewhere: root.
+                let parent = n
+                    .parent
+                    .filter(|p| same_page && tx.doc().nodes.contains_key(p));
+                let w = world.get(i).copied().unwrap_or(n.rect);
                 let mut copy = n.clone();
                 copy.id = map[&n.id];
                 copy.children = n.children.iter().map(|c| map[c]).collect();
-                copy.rect = world.translate(offset - tx.doc().parent_origin(parent));
+                copy.rect = w.translate(offset - tx.doc().parent_origin(parent));
+                remap(&mut copy, &map);
                 let id = tx.insert(copy, parent, None);
                 for d in nodes
                     .iter()
-                    .filter(|d| d.id != n.id && is_desc(&nodes, d.id, n.id))
+                    .filter(|d| d.id != n.id && is_desc(nodes, d.id, n.id))
                 {
                     let mut c = d.clone();
                     c.id = map[&d.id];
                     c.parent = d.parent.map(|p| map[&p]);
                     c.children = d.children.iter().map(|x| map[x]).collect();
+                    remap(&mut c, &map);
                     tx.put(c);
                 }
                 new_roots.push(id);
             }
+            for id in map.values() {
+                crate::editor::whiteboard::update_connector(tx, *id);
+            }
             new_roots
-        });
-        self.selection = new_roots;
-        self.status = format!("Pasted {} layer(s)", self.selection.len());
+        })
+    }
+
+    /// Insert a library item centered at world point `at`.
+    pub fn insert_library_item(&mut self, item: &crate::library::LibItem, at: V2) -> Vec<NodeId> {
+        let b = item.bounds().unwrap_or_default();
+        let world: Vec<Rect> = item
+            .roots
+            .iter()
+            .filter_map(|r| item.nodes.iter().find(|n| n.id == *r).map(|n| n.rect))
+            .collect();
+        let offset = (at - b.center()).round();
+        let ids = self.insert_subtrees(
+            &format!("Insert {}", item.name),
+            &item.nodes,
+            &item.roots,
+            &world,
+            offset,
+            false,
+        );
+        self.selection = ids.clone();
+        ids
     }
 
     fn reorder(&mut self, f: impl Fn(usize, usize) -> usize) {

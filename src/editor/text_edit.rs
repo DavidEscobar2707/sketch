@@ -7,10 +7,10 @@ use crate::text;
 
 impl Editor {
     fn text_len(&self, id: NodeId) -> usize {
-        match self.doc.get(id).map(|n| &n.kind) {
-            Some(NodeKind::Text { text, .. }) => text.chars().count(),
-            _ => 0,
-        }
+        self.doc
+            .get(id)
+            .and_then(|n| n.kind.text())
+            .map_or(0, |t| t.chars().count())
     }
 
     /// Selected char range `[a, b)` of the open text edit, if any.
@@ -29,7 +29,7 @@ impl Editor {
         let n_new = s.chars().count();
         let mut caret = te.caret;
         if let Some(n) = self.tx().node_mut(te.id)
-            && let NodeKind::Text { text, .. } = &mut n.kind
+            && let Some(text) = n.kind.text_mut()
         {
             // Replacement text takes the style of the first replaced character.
             let mut inherit: Option<TextSpan> = None;
@@ -76,7 +76,7 @@ impl Editor {
             return;
         }
         if let Some(n) = self.tx().node_mut(te.id)
-            && let NodeKind::Text { text, .. } = &mut n.kind
+            && let Some(text) = n.kind.text_mut()
         {
             let (ba, bb) = (byte_at(text, a), byte_at(text, b));
             text.replace_range(ba..bb, "");
@@ -229,7 +229,8 @@ impl Editor {
                 n.style.set_fill(Some(c));
             }
             if let Some(z) = probe.size
-                && let NodeKind::Text { font_size, .. } = &mut n.kind
+                && let NodeKind::Text { font_size, .. } | NodeKind::Sticky { font_size, .. } =
+                    &mut n.kind
             {
                 *font_size = z;
             }
@@ -268,9 +269,7 @@ impl Editor {
             .map(|t| t.id)
             .or_else(|| self.selection.first().copied())?;
         let n = self.doc.get(id)?;
-        let NodeKind::Text { font_size, .. } = &n.kind else {
-            return None;
-        };
+        let font_size = &n.kind.font_size()?;
         let at = match (self.text_selection(), &self.text_edit) {
             (Some((a, _)), _) => a,
             (None, Some(te)) => te.caret.saturating_sub(1),

@@ -53,6 +53,7 @@ pub enum Action {
     Underline,
     Strikethrough,
     PlaceImage,
+    ToggleSketch,
 }
 
 impl Action {
@@ -110,6 +111,31 @@ fn bindings() -> Vec<(Key, Chord, Action, &'static str)> {
             "Pencil (freehand sketch)",
         ),
         (Char('y'), SHIFT, A::Tool(Tool::Polygon), "Polygon tool"),
+        (Char('d'), PLAIN, A::Tool(Tool::Diamond), "Diamond tool"),
+        (Char('l'), SHIFT, A::Tool(Tool::Arrow), "Arrow tool"),
+        (Char('s'), PLAIN, A::Tool(Tool::Sticky), "Sticky note"),
+        (Char('k'), PLAIN, A::Tool(Tool::Laser), "Laser pointer"),
+        (Char('1'), PLAIN, A::Tool(Tool::Select), "Select tool"),
+        (Char('2'), PLAIN, A::Tool(Tool::Rect), "Rectangle tool"),
+        (Char('3'), PLAIN, A::Tool(Tool::Diamond), "Diamond tool"),
+        (Char('4'), PLAIN, A::Tool(Tool::Ellipse), "Ellipse tool"),
+        (Char('5'), PLAIN, A::Tool(Tool::Arrow), "Arrow tool"),
+        (Char('6'), PLAIN, A::Tool(Tool::Line), "Line tool"),
+        (
+            Char('7'),
+            PLAIN,
+            A::Tool(Tool::Pencil),
+            "Pencil (freehand sketch)",
+        ),
+        (Char('8'), PLAIN, A::Tool(Tool::Text), "Text tool"),
+        (Char('9'), PLAIN, A::PlaceImage, "Place image…"),
+        (Char('0'), PLAIN, A::Tool(Tool::Eraser), "Eraser"),
+        (
+            Char('h'),
+            CMD_ALT,
+            A::ToggleSketch,
+            "Hand-drawn style on/off",
+        ),
         (Char('s'), SHIFT, A::Tool(Tool::Star), "Star tool"),
         (
             Char('b'),

@@ -447,8 +447,37 @@ pub fn glyph_svg_path(gid: u16, origin: V2, font_size: f64) -> String {
     glyph_path(0, gid, origin, font_size).to_svg()
 }
 
-/// Layout of a text node's content in its box (None for other kinds).
+/// Inner padding of sticky notes.
+pub const STICKY_PAD: f64 = 16.0;
+
+/// Where a node's text box starts inside the node.
+pub fn text_offset(n: &crate::model::Node) -> V2 {
+    match n.kind {
+        crate::model::NodeKind::Sticky { .. } => v2(STICKY_PAD, STICKY_PAD),
+        _ => V2::ZERO,
+    }
+}
+
+/// Layout of a text node's (or sticky note's) content in its box (None for other kinds).
 pub fn layout_node(n: &crate::model::Node) -> Option<TextLayout> {
+    if let crate::model::NodeKind::Sticky { text, font_size } = &n.kind {
+        // Shrink the font (down to 12) until the text fits, like Excalidraw's sticky notes.
+        let w = (n.rect.w - 2.0 * STICKY_PAD).max(10.0);
+        let h = (n.rect.h - 2.0 * STICKY_PAD).max(10.0);
+        let mut size = *font_size;
+        loop {
+            let ratio = size / font_size;
+            let mut ts = n.text_style.clone();
+            for sp in &mut ts.spans {
+                sp.size = sp.size.map(|z| z * ratio);
+            }
+            let l = layout_rich(text, size, Color::INK, &ts, Some(w), TextAlign::Left);
+            if l.height <= h || size <= 12.0 {
+                return Some(l);
+            }
+            size = (size - 2.0).max(12.0);
+        }
+    }
     let crate::model::NodeKind::Text {
         text,
         font_size,

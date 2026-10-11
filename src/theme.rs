@@ -331,6 +331,12 @@ pub enum Icon {
     ArrowRight,
     ArrowDown,
     SpaceBetween,
+    Arrow,
+    Sticky,
+    Diamond,
+    Laser,
+    Library,
+    Sketch,
 }
 
 pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
@@ -663,6 +669,54 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color3
             line(&[pt(4.0, 8.0), pt(12.0, 8.0)]);
             line(&[pt(6.0, 6.0), pt(4.0, 8.0), pt(6.0, 10.0)]);
             line(&[pt(10.0, 6.0), pt(12.0, 8.0), pt(10.0, 10.0)]);
+        }
+        Icon::Arrow => {
+            line(&[pt(3.0, 13.0), pt(13.0, 3.0)]);
+            line(&[pt(7.5, 3.0), pt(13.0, 3.0), pt(13.0, 8.5)]);
+        }
+        Icon::Sticky => {
+            closed(&[
+                pt(2.5, 2.5),
+                pt(13.5, 2.5),
+                pt(13.5, 9.5),
+                pt(9.5, 13.5),
+                pt(2.5, 13.5),
+            ]);
+            line(&[pt(13.5, 9.5), pt(9.5, 9.5), pt(9.5, 13.5)]);
+        }
+        Icon::Diamond => {
+            closed(&[pt(8.0, 1.8), pt(14.2, 8.0), pt(8.0, 14.2), pt(1.8, 8.0)]);
+        }
+        Icon::Laser => {
+            line(&[pt(2.5, 13.5), pt(9.5, 6.5)]);
+            painter.circle_filled(pt(11.0, 5.0), 2.2 * u, color);
+            for (dx, dy) in [(0.0, -3.8), (3.8, 0.0), (2.7, -2.7)] {
+                line(&[
+                    pt(11.0 + dx * 0.9, 5.0 + dy * 0.9),
+                    pt(11.0 + dx * 1.35, 5.0 + dy * 1.35),
+                ]);
+            }
+        }
+        Icon::Library => {
+            for x in [3.0, 6.5] {
+                painter.rect_stroke(
+                    Rect::from_min_max(pt(x, 2.5), pt(x + 2.5, 13.5)),
+                    0.6 * u,
+                    st,
+                    egui::StrokeKind::Middle,
+                );
+            }
+            closed(&[pt(10.0, 3.5), pt(12.3, 2.9), pt(14.6, 12.9), pt(12.3, 13.5)]);
+        }
+        Icon::Sketch => {
+            let pts: Vec<Pos2> = (0..=12)
+                .map(|i| {
+                    let t = i as f32 / 12.0;
+                    pt(2.5 + 11.0 * t, 11.0 - 6.0 * t + 1.2 * (t * 19.0).sin())
+                })
+                .collect();
+            line(&pts);
+            line(&[pt(2.5, 13.5), pt(13.5, 13.5)]);
         }
         Icon::Grid => {
             for (x, y) in [(2.5, 2.5), (9.0, 2.5), (2.5, 9.0), (9.0, 9.0)] {

@@ -8,7 +8,9 @@ behavior of [Paper](https://paper.design) and built clean-room on `wgpu` + `wini
 A local-first design and whiteboard tool. Projects are folders of pages; each page is an
 infinite canvas with frames, groups, components and instances, auto layout and constraints,
 vector paths and booleans, gradients and image fills, rich text, smart guides, and
-pressure-sensitive ink. Everything autosaves, and exports to PNG and SVG.
+pressure-sensitive ink — plus a whiteboard mode: hand-drawn (rough.js-style) shapes, arrows that
+bind to shapes and re-route, elbow connectors, sticky notes, a laser pointer and a shape
+library. Everything autosaves, and exports to PNG and SVG.
 
 ![Figma-core features](docs/screenshots/milestone3_figma_core.png)
 
@@ -108,6 +110,8 @@ All of these are in `docs/screenshots/`.
 
 ## Using it
 
+![Whiteboard features](docs/screenshots/milestone4_whiteboard.png)
+
 The tools sit in the floating bar at the bottom of the canvas. Select a layer to edit it in
 the **Design** panel on the right. The **Layers** panel on the left shows the tree: click to
 select, Shift-click to add, double-click to rename, and use 👁 / 🔒 to hide or lock. The
@@ -174,9 +178,9 @@ Known gaps), ⏳ planned in a later milestone, ❌ not planned.
 | Rich text (per-range bold/italic/size/colour) | ✓ | ✓ | – | ✅ Plus underline, strikethrough, line height, letter spacing |
 | Align / distribute | ✓ | ✓ | ✓ | ✅ ⌥A/D/W/S/H/V, ⌥⇧H/V |
 | Smart guides, spacing, measurement | ✓ | ✓ | – | ✅ Edge/center snap, equal spacing, ⌥-hover distances |
-| Hand-drawn (rough) style per element | – | – | ✓ | ⏳ M4 |
-| Bound arrows, elbow arrows, quick shapes, sticky notes | – | (FigJam) | ✓ | ⏳ M4 |
-| Laser pointer, shape library | – | (FigJam) | ✓ | ⏳ M4 |
+| Hand-drawn (rough) style per element | – | – | ✓ | ✅ rough.js 4.6.4 port, verified against rough.js output; sloppiness, fill styles |
+| Bound arrows, elbow arrows, quick shapes, sticky notes | – | (FigJam) | ✓ | ✅ Orbit binding that follows shapes, straight/curved/elbow, 5 heads, diamond, quick-connect, stickies |
+| Laser pointer, shape library | – | (FigJam) | ✓ | ✅ Fading laser trail; shared library with starter items |
 | Inspector, layers drag-reorder, command palette (⌘K) | ✓ | ✓ | ✓ | ⚠️ inspector done; ⏳ M5 for the rest |
 | Export PNG / SVG / PDF of selection, frame, page | ✓ | ✓ | ✓ (PNG/SVG) | ⚠️ PNG/SVG done; ⏳ PDF in M6 |
 | Import .excalidraw / SVG, copy-paste across projects | – | ✓ (SVG) | ✓ | ⚠️ cross-project paste done; ⏳ M6 |

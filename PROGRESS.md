@@ -15,9 +15,39 @@ are credited in `THIRD_PARTY.md`.
 | P1: local projects, home screen, autosave, atomic writes, versioned format | ✅ done | `src/project/`, `src/session.rs`, `src/io/atomic.rs`, `tests/projects.rs::m1_*`, `milestone1_home.png`, `milestone1_trash.png` |
 | P2: multiple pages, infinite canvas per page | ✅ done | `src/editor/pages.rs`, `src/ui/pages.rs`, `tests/projects.rs::m2_*`, `milestone2_pages.png` |
 | P3: Figma core | ✅ done | `src/layout.rs`, `src/editor/{structure,vector_ops,text_edit}.rs`, `src/render/{draw,tess}.rs`, `src/ui/inspector.rs`, `tests/figma.rs`, `tests/perf.rs`, `milestone3_figma_core.png`, `milestone3_canvas.png` |
-| P4: Excalidraw core | ⏳ | |
+| P4: Excalidraw core | ✅ done | `src/render/rough.rs`, `src/connector.rs`, `src/editor/whiteboard.rs`, `src/library.rs`, `src/ui/library.rs`, `tests/excalidraw.rs`, `milestone4_whiteboard.png`, `THIRD_PARTY.md` |
 | P5: inspector, layers drag-reorder, command palette, shortcuts | ⏳ | |
 | P6: import/export (PNG/SVG/PDF, .excalidraw, SVG), cross-project paste | ⏳ | |
+
+### P4 notes
+
+* **rough.js 4.6.4 port** (`render/rough.rs`): RNG, lines, curves, ellipses, SVG paths, solid,
+  hachure, cross-hatch, zigzag and dots fills, plus Excalidraw's element → options mapping
+  (`adjustRoughness`, dash patterns, fill weight, hachure gap). The test compares ten
+  generator calls against real rough.js output (`tests/fixtures/rough/`, produced by
+  running the MIT library under Node) to 1e-6, so the same seed draws the same wobble.
+  Per-node toggle (⌘⌥H or the inspector), sloppiness 0/1/2, fill style, re-roll seed; with
+  nothing selected the toggle sets the default for new shapes.
+* **Arrows** (`connector.rs`): a `Connector` node with start/end bindings (`node`, normalized
+  fixed point, inside/orbit). Orbit ends stop at the target outline + `5 + stroke/2`, aimed
+  at the other end's focus, and re-route in the fixup pass whenever a bound layer (or an
+  ancestor) moves, resizes or is deleted. Straight, curved (Catmull-Rom) and elbow routes;
+  elbow uses a grid + A* with Excalidraw's bend penalty and segment-count heuristic.
+  Heads: arrow, triangle, dot, bar, diamond. Endpoint handles rebind; the midpoint handle
+  bends. Labels on shapes defer to the shape when binding.
+* **Quick diagram shapes**: diamond tool (D), polygon/star, and quick-connect "+" knobs on a
+  selected shape that duplicate it 80 px away and connect the two with a bound arrow.
+* **Sticky notes** (S): colored note with padding 16, text wraps and the font shrinks
+  (to 12) to fit, six colors.
+* **Laser pointer** (K): a trail that fades over 1 s and shows the last 50 points, eased like
+  Excalidraw; the event loop animates only while points are visible, then idles.
+* **Library**: a shared `library.json` in the projects folder (starter flowchart items on
+  first use), a Library tab with tessellated previews, add-selection, rename, remove, insert
+  (fresh ids, arrow bindings and instance links remapped).
+* Number keys 1–0 select tools like Excalidraw (1 select … 0 eraser).
+* Deferred depth: Excalidraw's dynamic-AABB "side hack" in elbow routing, arrow labels and
+  text bound inside shapes, multi-point arrows by clicking, freedraw with perfect-freehand
+  (paper-rs keeps its own ink), rough rendering of text/ink, collaboration.
 
 ### P3 notes
 

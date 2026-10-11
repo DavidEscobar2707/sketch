@@ -174,13 +174,228 @@ pub fn panel(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                 separator(ui);
                 stroke(ui, ed, &ids, &first);
             }
+            if matches!(first.kind, NodeKind::Connector { .. }) {
+                separator(ui);
+                arrow_section(ui, ed, &ids, &first);
+            }
+            if matches!(first.kind, NodeKind::Sticky { .. }) {
+                separator(ui);
+                sticky_section(ui, ed, &ids, &first);
+            }
             separator(ui);
             layer(ui, ed, &ids, &first);
-            super::sketch_section(ui, ed, &ids, &first, st);
+            if !matches!(
+                first.kind,
+                NodeKind::Text { .. }
+                    | NodeKind::Stroke { .. }
+                    | NodeKind::Group
+                    | NodeKind::Sticky { .. }
+            ) {
+                separator(ui);
+                sketch_section(ui, ed, &ids, &first);
+            }
+            let _ = st;
         });
 }
 
+/// FigJam/Excalidraw-style sticky colours.
+pub const STICKY_COLORS: [Color; 6] = [
+    Color::rgb(0xff, 0xdf, 0x6b),
+    Color::rgb(0xff, 0xb8, 0xa8),
+    Color::rgb(0xb5, 0xe6, 0xa2),
+    Color::rgb(0xa8, 0xd8, 0xff),
+    Color::rgb(0xd7, 0xc2, 0xff),
+    Color::rgb(0xe8, 0xe8, 0xec),
+];
+
+fn swatches(ui: &mut Ui, current: Color) -> Option<Color> {
+    let mut out = None;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        for c in STICKY_COLORS {
+            let (r, resp) = ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::click());
+            ui.painter().rect_filled(r, 5.0, c32(c));
+            if c == current {
+                ui.painter().rect_stroke(
+                    r,
+                    5.0,
+                    egui::Stroke::new(2.0, theme::accent()),
+                    egui::StrokeKind::Outside,
+                );
+            }
+            if resp.clicked() {
+                out = Some(c);
+            }
+        }
+    });
+    out
+}
+
+fn sticky_section(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
+    ui.label(title_text("Sticky note"));
+    let cur = first.style.fill().unwrap_or(STICKY_COLORS[0]);
+    if let Some(c) = swatches(ui, cur) {
+        apply(ed, "fill", ids, |n| n.style.set_fill(Some(c)));
+        ed.sticky_color = c;
+    }
+    if let NodeKind::Sticky { font_size, .. } = first.kind {
+        row(ui, "Font size", |ui| {
+            if let Some(v) = num_field(ui, ed, "", font_size, 0.5, 8.0..=200.0, 70.0) {
+                apply(ed, "font size", ids, |n| {
+                    if let NodeKind::Sticky { font_size, .. } = &mut n.kind {
+                        *font_size = v;
+                    }
+                });
+            }
+        });
+    }
+}
+
+fn arrow_section(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
+    use crate::model::{Head, Route};
+    let NodeKind::Connector {
+        route,
+        start_head,
+        end_head,
+        start,
+        end,
+        ..
+    } = &first.kind
+    else {
+        return;
+    };
+    ui.label(title_text("Arrow"));
+    let routes = [
+        (Route::Straight, "Straight"),
+        (Route::Curved, "Curved"),
+        (Route::Elbow, "Elbow"),
+    ];
+    row(ui, "Type", |ui| {
+        if let Some(v) = combo(ui, "route", *route, &routes, 96.0) {
+            apply(ed, "route", ids, |n| {
+                if let NodeKind::Connector { route, points, .. } = &mut n.kind {
+                    *route = v;
+                    if v != Route::Elbow && points.len() > 2 && v == Route::Straight {
+                        let (a, b) = (points[0], *points.last().unwrap());
+                        *points = vec![a, b];
+                    }
+                }
+            });
+            ed.arrow_route = v;
+            // Re-route through the binding logic.
+            ed.begin("Change route");
+            {
+                let mut tx = ed.tx();
+                for id in ids {
+                    crate::editor::whiteboard::update_connector(&mut tx, *id);
+                }
+            }
+            ed.commit();
+        }
+    });
+    let heads: Vec<(Head, &str)> = Head::ALL.iter().map(|h| (*h, h.label())).collect();
+    row(ui, "Heads", |ui| {
+        if let Some(v) = combo(ui, "h-start", *start_head, &heads, 72.0) {
+            apply(ed, "heads", ids, |n| {
+                if let NodeKind::Connector { start_head, .. } = &mut n.kind {
+                    *start_head = v;
+                }
+            });
+        }
+        if let Some(v) = combo(ui, "h-end", *end_head, &heads, 72.0) {
+            apply(ed, "heads", ids, |n| {
+                if let NodeKind::Connector { end_head, .. } = &mut n.kind {
+                    *end_head = v;
+                }
+            });
+        }
+    });
+    let bound = |b: &Option<crate::model::Binding>| {
+        b.and_then(|b| ed.doc.get(b.node).map(|n| n.name.clone()))
+            .unwrap_or_else(|| "—".into())
+    };
+    ui.label(
+        RichText::new(format!("Connects {} → {}", bound(start), bound(end)))
+            .size(theme::SECONDARY)
+            .color(theme::pal(ui).secondary),
+    );
+}
+
+fn sketch_section(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
+    use crate::model::rough::{FillStyle, Rough};
+    ui.horizontal(|ui| {
+        ui.label(title_text("Hand-drawn"));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let mut on = first.style.rough.is_some();
+            if ui
+                .checkbox(&mut on, "")
+                .on_hover_text("Sketchy rough.js-style lines (⌘⌥H)")
+                .changed()
+            {
+                ed.toggle_sketch();
+            }
+        });
+    });
+    let Some(r) = first.style.rough else { return };
+    let levels = [(0u8, "Architect"), (1, "Artist"), (2, "Cartoonist")];
+    let cur = r.roughness.round().clamp(0.0, 2.0) as u8;
+    row(ui, "Sloppiness", |ui| {
+        if let Some(v) = combo(ui, "rough", cur, &levels, 96.0) {
+            apply(ed, "rough", ids, |n| {
+                if let Some(r) = &mut n.style.rough {
+                    r.roughness = v as f64;
+                }
+            });
+        }
+    });
+    let fills: Vec<(FillStyle, &str)> = FillStyle::ALL.iter().map(|f| (*f, f.label())).collect();
+    row(ui, "Fill style", |ui| {
+        if let Some(v) = combo(ui, "fillstyle", r.fill_style, &fills, 96.0) {
+            apply(ed, "rough", ids, |n| {
+                if let Some(r) = &mut n.style.rough {
+                    r.fill_style = v;
+                }
+            });
+        }
+    });
+    if ui
+        .small_button("New wobble")
+        .on_hover_text("Re-roll the random seed")
+        .clicked()
+    {
+        apply(ed, "rough", ids, |n| {
+            if let Some(r) = &mut n.style.rough {
+                *r = Rough {
+                    seed: r.seed.wrapping_mul(1103515245).wrapping_add(12345) | 1,
+                    ..*r
+                };
+            }
+        });
+    }
+}
+
 fn nothing_selected(ui: &mut Ui, ed: &mut Editor) {
+    ui.label(title_text("New shapes"));
+    let mut sketch = ed.sketch.is_some();
+    if ui.checkbox(&mut sketch, "Hand-drawn style").changed() {
+        ed.toggle_sketch();
+    }
+    let routes = [
+        (crate::model::Route::Straight, "Straight"),
+        (crate::model::Route::Curved, "Curved"),
+        (crate::model::Route::Elbow, "Elbow"),
+    ];
+    row(ui, "Arrows", |ui| {
+        if let Some(v) = combo(ui, "new-route", ed.arrow_route, &routes, 96.0) {
+            ed.arrow_route = v;
+        }
+    });
+    row(ui, "Sticky", |ui| {
+        if let Some(c) = swatches(ui, ed.sticky_color) {
+            ed.sticky_color = c;
+        }
+    });
+    separator(ui);
     ui.label(title_text("Pencil"));
     row(ui, "Width", |ui| {
         ui.add(egui::Slider::new(&mut ed.ink_width, 0.5..=24.0))
