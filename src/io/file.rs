@@ -1,0 +1,158 @@
+//! The `.paper-rs` document format: versioned, pretty-printed JSON.
+
+use crate::geom::Camera;
+use crate::model::{Document, Node, NodeId};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::path::Path;
+
+pub const FORMAT: &str = "paper-rs";
+pub const VERSION: u32 = 1;
+pub const EXTENSION: &str = "paper-rs";
+
+#[derive(Serialize, Deserialize)]
+struct FileV1 {
+    format: String,
+    version: u32,
+    name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    camera: Option<Camera>,
+    next_id: u64,
+    root: Vec<NodeId>,
+    nodes: Vec<Node>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct Header {
+    format: String,
+    version: u32,
+}
+
+#[derive(Debug)]
+pub enum FileError {
+    Io(std::io::Error),
+    Json(serde_json::Error),
+    NotPaperRs,
+    UnsupportedVersion(u32),
+    Invalid(String),
+}
+
+impl std::fmt::Display for FileError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FileError::Io(e) => write!(f, "I/O error: {e}"),
+            FileError::Json(e) => write!(f, "malformed file: {e}"),
+            FileError::NotPaperRs => write!(f, "not a .paper-rs document"),
+            FileError::UnsupportedVersion(v) => {
+                write!(
+                    f,
+                    "file version {v} is newer than this app supports ({VERSION})"
+                )
+            }
+            FileError::Invalid(s) => write!(f, "invalid document: {s}"),
+        }
+    }
+}
+
+impl std::error::Error for FileError {}
+
+pub fn to_string(doc: &Document, camera: Option<&Camera>) -> String {
+    let mut nodes: Vec<Node> = doc.nodes.values().cloned().collect();
+    nodes.sort_by_key(|n| n.id);
+    let f = FileV1 {
+        format: FORMAT.into(),
+        version: VERSION,
+        name: doc.name.clone(),
+        camera: camera.copied(),
+        next_id: doc.next_id,
+        root: doc.root.clone(),
+        nodes,
+    };
+    serde_json::to_string_pretty(&f).expect("document serializes")
+}
+
+pub fn from_str(s: &str) -> Result<(Document, Option<Camera>), FileError> {
+    let header: Header = serde_json::from_str(s).map_err(|_| FileError::NotPaperRs)?;
+    if header.format != FORMAT {
+        return Err(FileError::NotPaperRs);
+    }
+    if header.version > VERSION {
+        return Err(FileError::UnsupportedVersion(header.version));
+    }
+    let f: FileV1 = serde_json::from_str(s).map_err(FileError::Json)?;
+    let max_id = f.nodes.iter().map(|n| n.id.0).max().unwrap_or(0);
+    let nodes: HashMap<NodeId, Node> = f.nodes.into_iter().map(|n| (n.id, n)).collect();
+    let doc = Document {
+        name: f.name,
+        nodes,
+        root: f.root,
+        next_id: f.next_id.max(max_id + 1),
+    };
+    doc.validate().map_err(FileError::Invalid)?;
+    Ok((doc, f.camera))
+}
+
+/// Write atomically (temp file + rename) so a crash never leaves a truncated document.
+pub fn save(path: &Path, doc: &Document, camera: Option<&Camera>) -> Result<(), FileError> {
+    let tmp = path.with_extension("paper-rs.tmp");
+    std::fs::write(&tmp, to_string(doc, camera)).map_err(FileError::Io)?;
+    std::fs::rename(&tmp, path).map_err(FileError::Io)
+}
+
+pub fn load(path: &Path) -> Result<(Document, Option<Camera>), FileError> {
+    let s = std::fs::read_to_string(path).map_err(FileError::Io)?;
+    from_str(&s)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::demo;
+
+    #[test]
+    fn roundtrip_demo_document() {
+        let ed = demo::showcase();
+        let cam = Camera {
+            pan: crate::geom::v2(3.0, 4.0),
+            zoom: 0.5,
+        };
+        let s = to_string(&ed.doc, Some(&cam));
+        let (doc, cam2) = from_str(&s).unwrap();
+        assert_eq!(doc, ed.doc);
+        assert_eq!(cam2, Some(cam));
+        // Serialization is deterministic.
+        assert_eq!(to_string(&doc, Some(&cam)), s);
+    }
+
+    #[test]
+    fn rejects_foreign_and_future_files() {
+        assert!(matches!(
+            from_str("{\"hello\":1}"),
+            Err(FileError::NotPaperRs)
+        ));
+        assert!(matches!(
+            from_str("{\"format\":\"x\",\"version\":1}"),
+            Err(FileError::NotPaperRs)
+        ));
+        assert!(matches!(
+            from_str("{\"format\":\"paper-rs\",\"version\":99}"),
+            Err(FileError::UnsupportedVersion(99))
+        ));
+        let broken =
+            r#"{"format":"paper-rs","version":1,"name":"x","next_id":1,"root":[5],"nodes":[]}"#;
+        assert!(matches!(from_str(broken), Err(FileError::Invalid(_))));
+    }
+
+    #[test]
+    fn save_and_load_file() {
+        let dir = std::env::temp_dir().join(format!("paper-rs-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("doc.paper-rs");
+        let ed = demo::showcase();
+        save(&path, &ed.doc, None).unwrap();
+        let (doc, cam) = load(&path).unwrap();
+        assert_eq!(doc, ed.doc);
+        assert!(cam.is_none());
+        std::fs::remove_dir_all(dir).ok();
+    }
+}
