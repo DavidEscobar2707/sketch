@@ -33,6 +33,9 @@ rfd = "0.17"
 fastrand = "2"
 dirs = "6"
 i_overlay = "9.0.1"
+miniz_oxide = "0.9.1"
+usvg = "0.48"
+arboard = { version = "3.6.1", features = ["image-data"] }
 
 [profile.release]
 debug = false

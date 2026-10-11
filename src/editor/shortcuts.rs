@@ -69,6 +69,9 @@ pub enum Action {
     CopyProps,
     PasteProps,
     Home,
+    ExportPdf,
+    CopyAsPng,
+    CopyAsSvg,
 }
 
 impl Action {
@@ -152,6 +155,9 @@ fn bindings() -> Vec<(Key, Chord, Action, &'static str)> {
             "Hand-drawn style on/off",
         ),
         (Char('k'), CMD, A::CommandPalette, "Command palette"),
+        (Char('p'), CMD_ALT, A::ExportPdf, "Export PDF"),
+        (Char('c'), CMD_SHIFT, A::CopyAsPng, "Copy as PNG"),
+        (Char('c'), CMD_ALT_SHIFT, A::CopyAsSvg, "Copy as SVG"),
         (Char('/'), CMD_SHIFT, A::CommandPalette, "Command palette"),
         (Char('r'), CMD, A::Rename, "Rename layer"),
         (Char('\\'), CMD, A::ToggleUi, "Show / hide UI"),
@@ -489,6 +495,7 @@ pub fn menus() -> Vec<(&'static str, Vec<MenuEntry>)> {
                 S,
                 I("Export PNG…", A::ExportPng),
                 I("Export SVG…", A::ExportSvg),
+                I("Export PDF…", A::ExportPdf),
             ],
         ),
         (
@@ -499,6 +506,8 @@ pub fn menus() -> Vec<(&'static str, Vec<MenuEntry>)> {
                 S,
                 I("Cut", A::Cut),
                 I("Copy", A::Copy),
+                I("Copy as PNG", A::CopyAsPng),
+                I("Copy as SVG", A::CopyAsSvg),
                 I("Paste", A::Paste),
                 I("Duplicate", A::Duplicate),
                 I("Delete", A::Delete),

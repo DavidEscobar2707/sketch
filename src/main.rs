@@ -1,6 +1,6 @@
 use paper_rs::app::Start;
 use paper_rs::editor::Editor;
-use paper_rs::io::{file, import, png, svg};
+use paper_rs::io::{export, file, import, png, svg};
 use paper_rs::model::Color;
 use paper_rs::project::{MANIFEST, Store};
 use paper_rs::render::{frame, gpu::Headless};
@@ -22,6 +22,12 @@ USAGE:
                                            render the full UI headlessly to a PNG
   paper-rs --export-png OUT.png PROJECT|FILE [--page N] [--scale S] [--transparent]
   paper-rs --export-svg OUT.svg PROJECT|FILE [--page N]
+  paper-rs --export-pdf OUT.pdf PROJECT|FILE [--page N] [--frames | --all-pages]
+  paper-rs --export OUT PROJECT|FILE --format png|svg|pdf [--scope page|frames|all]
+                                           [--page N] [--scale S] [--transparent]
+                                           (frames/all with PNG/SVG write a folder)
+  paper-rs --import FILE                   create a project from .excalidraw, .svg or
+                                           .paper-rs and print its folder
   paper-rs --help
 
 Projects live in ~/Documents/paper-rs (override with PAPER_RS_HOME).
@@ -82,7 +88,17 @@ fn run(args: Vec<String>) -> Result<(), String> {
             }
             if matches!(
                 a.as_str(),
-                "--screenshot" | "--export-png" | "--export-svg" | "--size" | "--scale" | "--page"
+                "--screenshot"
+                    | "--export-png"
+                    | "--export-svg"
+                    | "--export-pdf"
+                    | "--export"
+                    | "--format"
+                    | "--scope"
+                    | "--import"
+                    | "--size"
+                    | "--scale"
+                    | "--page"
             ) {
                 skip = true;
                 continue;
@@ -161,6 +177,106 @@ fn run(args: Vec<String>) -> Result<(), String> {
         let s = svg::export(&doc, None, None).ok_or("nothing to export")?;
         std::fs::write(&out, s).map_err(|e| e.to_string())?;
         println!("wrote {out}");
+        return Ok(());
+    }
+    let export_with =
+        |out: &str, format: export::Format, scope: export::Scope| -> Result<(), String> {
+            let pages: Vec<paper_rs::project::PageData> = if flag("--demo") {
+                vec![paper_rs::project::PageData {
+                    id: "demo".into(),
+                    name: "Launch plan".into(),
+                    doc: paper_rs::demo::showcase().doc,
+                    camera: None,
+                }]
+            } else {
+                import::load_any(input.ok_or("missing input file")?.as_ref())?
+            };
+            if page >= pages.len() {
+                return Err(format!("no page {page}"));
+            }
+            let refs: Vec<(&str, &paper_rs::model::Document)> =
+                pages.iter().map(|p| (p.name.as_str(), &p.doc)).collect();
+            let spec = export::Spec {
+                format,
+                scope,
+                scale,
+                transparent: flag("--transparent"),
+            };
+            let items = export::items(&spec, &refs, page, &[]);
+            let files = export::write(&spec, &items, out.as_ref(), None)?;
+            for f in files {
+                println!("wrote {}", f.display());
+            }
+            Ok(())
+        };
+    if let Some(out) = value("--export-pdf") {
+        let scope = if flag("--all-pages") {
+            export::Scope::AllPages
+        } else if flag("--frames") {
+            export::Scope::Frames
+        } else {
+            export::Scope::Page
+        };
+        return export_with(&out, export::Format::Pdf, scope);
+    }
+    if let Some(out) = value("--export") {
+        let format = match value("--format").as_deref().unwrap_or("png") {
+            "png" => export::Format::Png,
+            "svg" => export::Format::Svg,
+            "pdf" => export::Format::Pdf,
+            f => return Err(format!("unknown --format {f}")),
+        };
+        let scope = match value("--scope").as_deref().unwrap_or("page") {
+            "page" => export::Scope::Page,
+            "frames" => export::Scope::Frames,
+            "all" => export::Scope::AllPages,
+            s => return Err(format!("unknown --scope {s}")),
+        };
+        return export_with(&out, format, scope);
+    }
+    if let Some(src) = value("--import") {
+        let p = PathBuf::from(&src);
+        let store = Store::open(Store::default_root()).map_err(|e| e.to_string())?;
+        let name = p
+            .file_stem()
+            .map(|s| s.to_string_lossy().to_string())
+            .unwrap_or_else(|| "Imported".into());
+        let ext = p
+            .extension()
+            .map(|e| e.to_string_lossy().to_lowercase())
+            .unwrap_or_default();
+        let pages = match ext.as_str() {
+            "excalidraw" | "json" => {
+                let t = std::fs::read_to_string(&p).map_err(|e| e.to_string())?;
+                vec![paper_rs::project::PageData {
+                    id: paper_rs::project::new_id(),
+                    name: "Page 1".into(),
+                    doc: paper_rs::io::excalidraw::import_scene(&t)?,
+                    camera: None,
+                }]
+            }
+            "svg" => {
+                let t = std::fs::read_to_string(&p).map_err(|e| e.to_string())?;
+                vec![paper_rs::project::PageData {
+                    id: paper_rs::project::new_id(),
+                    name: "Page 1".into(),
+                    doc: paper_rs::io::svg_import::import_page(&t, &name)?,
+                    camera: None,
+                }]
+            }
+            _ => import::import_as_pages(&p)?.1,
+        };
+        let proj = store
+            .create_with_pages(&name, pages)
+            .map_err(|e| e.to_string())?;
+        for pg in proj.load_pages().map_err(|e| e.to_string())? {
+            paper_rs::assets::save_to_dir(
+                &proj.dir.join(paper_rs::project::ASSETS_DIR),
+                paper_rs::assets::used_by(&pg.doc),
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        println!("{}", proj.dir.display());
         return Ok(());
     }
     let start = match input {

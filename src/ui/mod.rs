@@ -20,8 +20,8 @@ pub struct UiState {
     pub renaming: Option<(NodeId, String)>,
     pub show_help: bool,
     pub show_grid_off: bool,
-    pub export_scale: u8,
-    pub export_transparent: bool,
+    /// Export settings (inspector Export section).
+    pub export: crate::io::export::Spec,
     /// The window has native chrome: a system menu bar (so no egui menu) and traffic lights
     /// inset into the toolbar / sidebar.
     pub native_chrome: bool,
@@ -83,9 +83,6 @@ pub(crate) fn title_text(text: impl Into<String>) -> RichText {
 
 /// Lay out the chrome and return the remaining canvas rectangle (logical px).
 pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
-    if st.export_scale == 0 {
-        st.export_scale = 2;
-    }
     if let Some(hv) = &mut st.home {
         home::draw(ui, hv, st.native_chrome, st.translucent_sidebar);
         return egui::Rect::NOTHING;
@@ -195,7 +192,7 @@ fn top_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
     let p = theme::pal(ui);
     ui.horizontal_centered(|ui| {
         if !st.native_chrome {
-            menu_bar(ui, ed, st);
+            menu_bar(ui, ed);
             ui.add_space(8.0);
         }
         if theme::icon_button(ui, theme::Icon::Grid, 26.0, false)
@@ -273,26 +270,12 @@ fn top_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
 
 /// egui menus for platforms without a native menu bar (inline, so the toolbar row keeps
 /// the title and zoom controls).
-fn menu_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
+fn menu_bar(ui: &mut Ui, ed: &mut Editor) {
     for (title, entries) in shortcuts::menus() {
         ui.menu_button(title, |ui| {
             menu_entries(ui, ed, &entries);
-            if title == "File" {
-                ui.separator();
-                export_options(ui, st);
-            }
         });
     }
-}
-
-fn export_options(ui: &mut Ui, st: &mut UiState) {
-    ui.horizontal(|ui| {
-        ui.label("PNG scale");
-        for s in [1u8, 2, 3] {
-            ui.selectable_value(&mut st.export_scale, s, format!("{s}x"));
-        }
-    });
-    ui.checkbox(&mut st.export_transparent, "Transparent PNG background");
 }
 
 fn layers(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {

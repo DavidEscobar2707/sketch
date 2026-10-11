@@ -10,7 +10,7 @@ infinite canvas with frames, groups, components and instances, auto layout and c
 vector paths and booleans, gradients and image fills, rich text, smart guides, and
 pressure-sensitive ink — plus a whiteboard mode: hand-drawn (rough.js-style) shapes, arrows that
 bind to shapes and re-route, elbow connectors, sticky notes, a laser pointer and a shape
-library. Everything autosaves, and exports to PNG and SVG.
+library. Everything autosaves, and exports to PNG, SVG and PDF; Excalidraw files and SVG import.
 
 ![Figma-core features](docs/screenshots/milestone3_figma_core.png)
 
@@ -74,39 +74,46 @@ dialogs use the XDG desktop portal.
 No display is needed. wgpu renders offscreen, through Mesa lavapipe when there is no GPU:
 
 ```sh
-paper-rs --screenshot ui.png --demo --size 1440x900 --scale 2   # full UI
-paper-rs --export-png out.png board.paper-rs --scale 2 [--transparent]
-paper-rs --export-svg out.svg board.paper-rs
+paper-rs --screenshot ui.png --demo --size 1440x900 --scale 2      # full UI
+paper-rs --screenshot home.png --home                              # projects home screen
+paper-rs --export-png out.png PROJECT_DIR --page 0 --scale 2 [--transparent]
+paper-rs --export-svg out.svg PROJECT_DIR
+paper-rs --export-pdf out.pdf PROJECT_DIR --frames                 # one PDF page per frame
+paper-rs --export out_dir PROJECT_DIR --format png --scope frames  # a folder of PNGs
+paper-rs --import board.excalidraw                                 # new project, prints its folder
 ```
 
 ## Tests
 
 ```sh
-cargo test                                # 51 unit/scenario tests + 8 headless GPU tests
+cargo test                                # ~140 tests: unit, scenario, headless GPU, CLI
 PAPER_RS_REQUIRE_GPU=1 cargo test         # fail (instead of skip) when no GPU adapter exists
+cargo test --release --test perf -- --nocapture   # 10k-element frame timings
 ```
 
-* **Unit tests** cover camera math, ink smoothing and pressure, text layout, snapping,
-  transactions, serialization and SVG.
-* **Scenario tests** (`src/editor/tests.rs`) drive the editor with synthetic pointer and
-  keyboard events. They draw, create, select, drag, resize, snap, nudge, copy/paste, reparent,
-  undo and redo.
-* **Headless GPU tests** (`tests/headless.rs`) render each milestone through wgpu, assert pixel
-  colors at known positions, and write the images below. One test rasterizes the SVG export
-  with resvg and requires it to match the GPU PNG export: 0.004% of pixels differ, all on
-  anti-aliased edges.
+* **Unit tests** cover geometry, vector paths, the rough.js port (compared with real
+  rough.js 4.6.4 output), auto layout and constraints, booleans, rich text spans, the elbow
+  router, formats and migrations, atomic writes, the project store, PDF structure, Excalidraw
+  and SVG import, the palette's fuzzy matching and the shortcut table.
+* **Scenario tests** drive the editor with synthetic pointer and keyboard events:
+  `src/editor/tests.rs` (core editing), `tests/projects.rs` (projects, autosave, pages),
+  `tests/figma.rs` (groups, components, auto layout, constraints, pen, booleans, rich text,
+  guides), `tests/excalidraw.rs` (hand-drawn style, arrows, quick-connect, stickies, laser,
+  library), `tests/workflow.rs` (layers drag, palette, shortcuts), `tests/io.rs` (export,
+  import, clipboard, CLI).
+* **Headless GPU tests** render through wgpu, assert pixels and write the screenshots below.
+  One rasterizes the SVG export with resvg and compares it with the GPU render; one renders
+  the PDF export with pdftoppm when installed.
 
-| Milestone | Screenshot(s) |
+| Milestone | Screenshot(s) in `docs/screenshots/` |
 |---|---|
-| 1. Infinite canvas, pan and zoom | `m1_canvas.png`, `m1_zoomed.png`, `m1_zoom_to_fit.png` |
-| 2. Freehand sketch with smoothing | `m2_sketch.png` (smoothing 0, 0.5, 0.9; fast vs slow; pen pressure ramp) |
-| 3. Shapes, frames, text | `m3_shapes_frames_text.png` (frame clipping, rounded rect, ellipse, line, text) |
-| 4. Select/move/resize, multi-select, snapping | `m4_multi_select.png`, `m4_snapping.png` (live guides), `m4_resized.png` |
-| 5. Layers panel and undo/redo | `m5_layers_edited.png`, `m5_layers_after_undo.png` |
-| 6. Save/load and PNG/SVG export | `m6_launch_plan.paper-rs`, `m6_export_frame@2x.png`, `m6_export_all_transparent.png`, `m6_export.svg`, `m6_export_svg_via_resvg.png` |
-| Real window (X11 under Xvfb, lavapipe) | `x11_window_xvfb.png` |
-
-All of these are in `docs/screenshots/`.
+| 1. Local projects | `milestone1_home.png`, `milestone1_trash.png` |
+| 2. Pages | `milestone2_pages.png` |
+| 3. Figma core | `milestone3_figma_core.png`, `milestone3_canvas.png` |
+| 4. Excalidraw core | `milestone4_whiteboard.png` |
+| 5. Inspector, palette, shortcuts | `milestone5_inspector.png`, `milestone5_palette.png`, `milestone5_shortcuts.png` |
+| 6. Import / export | `milestone6_pdf_page.png` (PDF rasterized by pdftoppm), `milestone6_excalidraw_import.png`, `milestone6_svg_import.png` |
+| paper-rs 0.1 | `m1_*` … `m6_*`, `app_demo.png`, `x11_window_xvfb.png` |
 
 ## Using it
 
@@ -182,8 +189,8 @@ Known gaps), ⏳ planned in a later milestone, ❌ not planned.
 | Bound arrows, elbow arrows, quick shapes, sticky notes | – | (FigJam) | ✓ | ✅ Orbit binding that follows shapes, straight/curved/elbow, 5 heads, diamond, quick-connect, stickies |
 | Laser pointer, shape library | – | (FigJam) | ✓ | ✅ Fading laser trail; shared library with starter items |
 | Inspector, layers drag-reorder, command palette (⌘K) | ✓ | ✓ | ✓ | ✅ Sectioned inspector, tree drag above/below/into, fuzzy palette over actions, pages, layers, library |
-| Export PNG / SVG / PDF of selection, frame, page | ✓ | ✓ | ✓ (PNG/SVG) | ⚠️ PNG/SVG done; ⏳ PDF in M6 |
-| Import .excalidraw / SVG, copy-paste across projects | – | ✓ (SVG) | ✓ | ⚠️ cross-project paste done; ⏳ M6 |
+| Export PNG / SVG / PDF of selection, frame, page | ✓ | ✓ | ✓ (PNG/SVG) | ✅ Selection, each frame, page or all pages; vector PDF with gradients, images, blend modes; copy as PNG/SVG |
+| Import .excalidraw / SVG, copy-paste across projects | – | ✓ (SVG) | ✓ | ✅ .excalidraw scenes, .excalidrawlib libraries, SVG (paths, gradients, images, text), system clipboard between pages, projects and apps |
 | Freehand ink with pressure | – | (pencil) | ✓ | ✅ Smoothing, pressure, eraser |
 | Multiplayer, cloud sync, plugins, MCP | ✓ | ✓ | ✓ | ❌ local-first by design |
 
@@ -213,6 +220,11 @@ Known gaps), ⏳ planned in a later milestone, ❌ not planned.
   reuse the previous item list and GPU buffers, so panning uploads nothing. With 10k visible
   nodes a cached frame takes ~3 ms (release, `tests/perf.rs`); the first frame at a new zoom
   octave takes ~140 ms on a CPU. Not tuned for 100k+.
+* **PDF**: text is outlined (not selectable); gradient stop transparency uses the first
+  stop's alpha; tiled image fills are drawn as repeated images.
+* **Import**: Excalidraw rotation is baked into paths (text rotation is dropped), bound text
+  inside shapes stays a separate text layer (except sticky notes), and fonts map to Inter.
+  SVG patterns, filters, masks and clip paths are not imported.
 * **Linux file dialogs** need an XDG desktop portal. Without one, Save/Open dialogs return
   nothing. The headless CLI is unaffected.
 
@@ -231,7 +243,10 @@ src/project/       project store, manifest/page formats, migrations
 src/session.rs     open project, autosave, thumbnails
 src/editor/        tools, structure (groups/components), vector ops, pages, text editing
 src/render/        draw ops → cached meshes → wgpu; headless capture
-src/io/            PNG, SVG, atomic writes, imports
+src/io/            PNG, SVG, PDF, export scopes, Excalidraw + SVG import, clipboard,
+                   atomic writes
+src/connector.rs   arrow bindings, elbow router, arrowheads
+src/library.rs     shared shape library
 src/ui/            home screen, pages, layers, inspector
 src/app.rs         winit application
 analysis/          reverse-engineering findings and design (raw dumps are gitignored)

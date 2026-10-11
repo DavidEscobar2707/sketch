@@ -186,6 +186,7 @@ impl Store {
         manifest.active_page = manifest.pages.first().map(|p| p.id.clone());
         let p = Project { dir, manifest };
         for page in &pages {
+            crate::assets::save_to_dir(&p.dir.join(ASSETS_DIR), crate::assets::used_by(&page.doc))?;
             p.save_page(page)?;
         }
         p.write_manifest()?;

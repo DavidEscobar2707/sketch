@@ -2,8 +2,7 @@
 
 use crate::editor::{AppRequest, Button, Editor, InputEvent, Key, Modifiers};
 use crate::geom::{V2, v2};
-use crate::io::{file, png, svg};
-use crate::model::Color;
+use crate::io::{file, png};
 use crate::project::Store;
 use crate::render::frame::{self, Painter};
 use crate::render::gpu::Headless;
@@ -85,6 +84,8 @@ impl App {
             menu: None,
         };
         app.st.library.library = library;
+        app.ed.clipboard_io = crate::io::clipboard::System::new()
+            .map(|c| Box::new(c) as Box<dyn crate::io::clipboard::Provider>);
         match start {
             Start::Home => app.show_home(),
             Start::Project(dir) => {
@@ -259,8 +260,10 @@ impl App {
     /// Import a file into a new project and open it.
     fn import_dialog(&mut self) {
         let Some(p) = rfd::FileDialog::new()
-            .add_filter("Supported files", &[file::EXTENSION])
+            .add_filter("Supported files", &[file::EXTENSION, "excalidraw", "svg"])
             .add_filter("paper-rs 0.1 document", &[file::EXTENSION])
+            .add_filter("Excalidraw scene", &["excalidraw"])
+            .add_filter("SVG", &["svg"])
             .pick_file()
         else {
             return;
@@ -341,6 +344,151 @@ impl App {
         }
     }
 
+    /// Export through a save (or folder) dialog.
+    fn export(&mut self, spec: crate::io::export::Spec) {
+        use crate::io::export;
+        let names: Vec<String> = self.ed.pages.iter().map(|p| p.name.clone()).collect();
+        let pages: Vec<(&str, &crate::model::Document)> = names
+            .iter()
+            .enumerate()
+            .map(|(i, n)| (n.as_str(), self.ed.page_doc(i)))
+            .collect();
+        let sel = self.ed.top_selection();
+        let items = export::items(&spec, &pages, self.ed.active_page, &sel);
+        if items.is_empty() {
+            self.ed.status = "Nothing to export".into();
+            return;
+        }
+        let ext = spec.format.ext();
+        let out = if spec.single_file(items.len()) {
+            let base = if items.len() == 1 {
+                items[0].name.clone()
+            } else {
+                self.st.project_name.clone()
+            };
+            rfd::FileDialog::new()
+                .add_filter(ext.to_uppercase(), &[ext])
+                .set_file_name(format!("{}.{ext}", crate::project::folder_name(&base)))
+                .save_file()
+                .map(|p| with_ext(p, ext))
+        } else {
+            rfd::FileDialog::new()
+                .set_title(format!(
+                    "Choose a folder for {} {} files",
+                    items.len(),
+                    ext.to_uppercase()
+                ))
+                .pick_folder()
+        };
+        let Some(out) = out else { return };
+        let gpu = self.offscreen();
+        match export::write(&spec, &items, &out, gpu.as_ref()) {
+            Ok(files) => {
+                self.ed.status = if files.len() == 1 {
+                    format!("Exported {}", files[0].display())
+                } else {
+                    format!("Exported {} files to {}", files.len(), out.display())
+                }
+            }
+            Err(e) => self.error(format!("Export failed: {e}")),
+        }
+    }
+
+    /// Bring a file into the current page: SVG, Excalidraw scene/library, image, or a
+    /// paper-rs page. Without an open project, a new project is created from it.
+    fn import_into_page(&mut self, p: &std::path::Path, at: Option<V2>) {
+        let ext = p
+            .extension()
+            .map(|e| e.to_string_lossy().to_lowercase())
+            .unwrap_or_default();
+        let at = at.unwrap_or_else(|| self.ed.camera.screen_to_world(self.ed.viewport * 0.5));
+        let text = || std::fs::read_to_string(p).map_err(|e| e.to_string());
+        let result: Result<String, String> = match ext.as_str() {
+            "png" | "jpg" | "jpeg" | "gif" | "webp" => {
+                self.place_image_file(p, at);
+                return;
+            }
+            "excalidrawlib" => text()
+                .and_then(|t| crate::io::excalidraw::import_library(&t))
+                .map(|items| {
+                    let n = items.len();
+                    self.st.library.library.items.extend(items);
+                    self.st.library.dirty = true;
+                    self.st.show_library = true;
+                    format!("Added {n} item(s) to the library")
+                }),
+            "svg" | "excalidraw" | "json" => text().and_then(|t| {
+                let nodes: Vec<crate::model::Node> = if ext == "svg" {
+                    crate::io::svg_import::parse(&t)?
+                } else {
+                    let doc = crate::io::excalidraw::import_scene(&t)?;
+                    doc.paint_order()
+                        .into_iter()
+                        .filter_map(|id| doc.get(id).cloned())
+                        .collect()
+                };
+                let (roots, world) = crate::io::clipboard::roots_of(&nodes);
+                let off = crate::io::clipboard::center_offset(&world, at);
+                let label = format!(
+                    "Import {}",
+                    p.file_name()
+                        .map(|f| f.to_string_lossy().to_string())
+                        .unwrap_or_default()
+                );
+                let ids = if ext == "svg" {
+                    // Keep an SVG together as one group.
+                    let name = p
+                        .file_stem()
+                        .map(|f| f.to_string_lossy().to_string())
+                        .unwrap_or("SVG".into());
+                    let b = crate::io::clipboard::bounds(&world).unwrap_or_default();
+                    vec![self.ed.edit(&label, |tx| {
+                        crate::io::svg_import::insert_group(tx, nodes, &name, b.min() + off)
+                    })]
+                } else {
+                    self.ed
+                        .insert_subtrees(&label, &nodes, &roots, &world, off, false)
+                };
+                self.ed.selection = ids;
+                Ok(format!("Imported {}", p.display()))
+            }),
+            _ => {
+                if self.session.project.is_none() {
+                    self.import_file(p);
+                    return;
+                }
+                // A paper-rs page or project: add its pages to this project.
+                crate::io::import::import_as_pages(p).map(|(_, pages)| {
+                    let n = pages.len();
+                    for pg in pages {
+                        let i = self.ed.add_page();
+                        self.ed.rename_page(i, &pg.name);
+                        let nodes: Vec<crate::model::Node> = pg
+                            .doc
+                            .paint_order()
+                            .into_iter()
+                            .filter_map(|id| pg.doc.get(id).cloned())
+                            .collect();
+                        let (roots, world) = crate::io::clipboard::roots_of(&nodes);
+                        self.ed.insert_subtrees(
+                            "Import page",
+                            &nodes,
+                            &roots,
+                            &world,
+                            V2::ZERO,
+                            false,
+                        );
+                    }
+                    format!("Imported {n} page(s)")
+                })
+            }
+        };
+        match result {
+            Ok(msg) => self.ed.status = msg,
+            Err(e) => self.error(format!("Could not import {}: {e}", p.display())),
+        }
+    }
+
     fn export_roots(&self) -> Option<Vec<crate::model::NodeId>> {
         let sel = self.ed.top_selection();
         (!sel.is_empty()).then_some(sel)
@@ -388,7 +536,32 @@ impl App {
                     self.place_image_file(&p, at);
                 }
                 AppRequest::New => self.new_project(),
-                AppRequest::Open => self.import_dialog(),
+                AppRequest::Open => {
+                    if self.session.project.is_some() {
+                        if let Some(p) = rfd::FileDialog::new()
+                            .add_filter(
+                                "Supported files",
+                                &[
+                                    "svg",
+                                    "excalidraw",
+                                    "excalidrawlib",
+                                    "json",
+                                    "png",
+                                    "jpg",
+                                    "jpeg",
+                                    "gif",
+                                    "webp",
+                                    file::EXTENSION,
+                                ],
+                            )
+                            .pick_file()
+                        {
+                            self.import_into_page(&p, None);
+                        }
+                    } else {
+                        self.import_dialog();
+                    }
+                }
                 AppRequest::Save => {
                     self.save(false);
                 }
@@ -403,46 +576,28 @@ impl App {
                         self.save(true);
                     }
                 }
-                AppRequest::ExportPng => {
-                    let Some(p) = rfd::FileDialog::new()
-                        .add_filter("PNG image", &["png"])
-                        .set_file_name(format!("{}.png", self.ed.doc.name))
-                        .save_file()
-                    else {
-                        continue;
+                AppRequest::ExportFormat(f) => {
+                    let spec = crate::io::export::Spec {
+                        format: f,
+                        ..self.st.export
                     };
-                    let p = with_ext(p, "png");
-                    let bg = (!self.st.export_transparent).then_some(Color::WHITE);
-                    let roots = self.export_roots();
-                    match png::export(
-                        &p,
-                        &self.ed.doc,
-                        roots.as_deref(),
-                        self.st.export_scale.max(1) as f64,
-                        bg,
-                    ) {
-                        Ok((w, h)) => {
-                            self.ed.status = format!("Exported {w}×{h} PNG to {}", p.display())
-                        }
-                        Err(e) => self.error(format!("PNG export failed: {e}")),
-                    }
+                    self.export(spec);
                 }
-                AppRequest::ExportSvg => {
-                    let Some(p) = rfd::FileDialog::new()
-                        .add_filter("SVG image", &["svg"])
-                        .set_file_name(format!("{}.svg", self.ed.doc.name))
-                        .save_file()
-                    else {
+                AppRequest::Export(spec) => self.export(spec),
+                AppRequest::CopyAsPng => {
+                    let roots = self.export_roots();
+                    let Some(gpu) = self.offscreen() else {
                         continue;
                     };
-                    let p = with_ext(p, "svg");
-                    let roots = self.export_roots();
-                    match svg::export(&self.ed.doc, roots.as_deref(), None) {
-                        Some(s) => match std::fs::write(&p, s) {
-                            Ok(()) => self.ed.status = format!("Exported SVG to {}", p.display()),
-                            Err(e) => self.error(format!("SVG export failed: {e}")),
-                        },
-                        None => self.ed.status = "Nothing to export".into(),
+                    match png::render(&gpu, &self.ed.doc, roots.as_deref(), 2.0, None) {
+                        Ok(img) => {
+                            if let Some(io) = &mut self.ed.clipboard_io {
+                                io.write_image(&img);
+                                self.ed.status =
+                                    format!("Copied {}×{} PNG", img.width(), img.height());
+                            }
+                        }
+                        Err(e) => self.ed.status = e,
                     }
                 }
             }
@@ -992,11 +1147,20 @@ impl ApplicationHandler<UserEvent> for App {
                     .extension()
                     .map(|e| e.to_string_lossy().to_lowercase())
                     .unwrap_or_default();
-                if matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp")
-                    && self.st.home.is_none()
+                if matches!(
+                    ext.as_str(),
+                    "png"
+                        | "jpg"
+                        | "jpeg"
+                        | "gif"
+                        | "webp"
+                        | "svg"
+                        | "excalidraw"
+                        | "excalidrawlib"
+                ) && self.st.home.is_none()
                 {
                     let at = self.ed.camera.screen_to_world(self.ed.pointer);
-                    self.place_image_file(&p, at);
+                    self.import_into_page(&p, Some(at));
                 } else if p.extension().is_some_and(|e| e == file::EXTENSION)
                     && self.confirm_discard()
                 {

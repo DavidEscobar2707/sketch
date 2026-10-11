@@ -105,16 +105,20 @@ impl Tool {
 }
 
 /// Requests the editor can't fulfil itself (dialogs, file system, clipboard).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum AppRequest {
+    /// Export with these settings (opens a save dialog).
+    Export(crate::io::export::Spec),
+    /// Export using the settings in the inspector, in this format.
+    ExportFormat(crate::io::export::Format),
+    /// Render the selection and put the PNG on the clipboard.
+    CopyAsPng,
     /// Back to the projects home screen.
     Home,
     New,
     Open,
     Save,
     SaveAs,
-    ExportPng,
-    ExportSvg,
     /// Pick an image file and place it on the canvas.
     PlaceImage,
     /// Pick an image for fill layer `.1` of these layers.
@@ -266,6 +270,10 @@ pub struct Editor {
     pub sticky_color: Color,
     /// Requests for the chrome (command palette, rename...).
     pub ui_events: Vec<commands::UiEvent>,
+    /// System clipboard (set by the app; None in tests unless injected).
+    pub clipboard_io: Option<Box<dyn crate::io::clipboard::Provider>>,
+    /// Text we last put on the system clipboard (to recognize our own copy).
+    clipboard_written: Option<String>,
     clipboard_style: Option<(crate::model::Style, crate::model::TextStyle)>,
 }
 
@@ -328,6 +336,8 @@ impl Editor {
             sticky_color: Color::rgb(0xff, 0xdf, 0x6b),
             ui_events: Vec::new(),
             clipboard_style: None,
+            clipboard_io: None,
+            clipboard_written: None,
         }
     }
 
@@ -445,6 +455,8 @@ impl Editor {
             sketch: self.sketch,
             arrow_route: self.arrow_route,
             sticky_color: self.sticky_color,
+            clipboard_io: self.clipboard_io.take(),
+            clipboard_written: self.clipboard_written.take(),
             ..Editor::new(doc)
         };
         self.file_path = path;
@@ -1846,13 +1858,7 @@ impl Editor {
                 self.copy();
                 self.delete_selection();
             }
-            A::Paste => {
-                // Same page: offset so the copy is visible. Another page or project: keep the
-                // position, as in Figma.
-                let same = self.clipboard_page.as_deref() == Some(self.active_page_id());
-                let d = if same { PASTE_OFFSET } else { 0.0 };
-                self.paste(v2(d, d))
-            }
+            A::Paste => self.paste_from_clipboard(),
             A::Duplicate => {
                 let saved = (
                     self.clipboard.clone(),
@@ -1860,7 +1866,7 @@ impl Editor {
                     self.clipboard_page.clone(),
                     self.clipboard_world.clone(),
                 );
-                self.copy();
+                self.copy_internal();
                 self.paste(v2(PASTE_OFFSET, PASTE_OFFSET));
                 (
                     self.clipboard,
@@ -1928,8 +1934,17 @@ impl Editor {
             A::Open => self.requests.push(AppRequest::Open),
             A::Save => self.requests.push(AppRequest::Save),
             A::SaveAs => self.requests.push(AppRequest::SaveAs),
-            A::ExportPng => self.requests.push(AppRequest::ExportPng),
-            A::ExportSvg => self.requests.push(AppRequest::ExportSvg),
+            A::ExportPng => self
+                .requests
+                .push(AppRequest::ExportFormat(crate::io::export::Format::Png)),
+            A::ExportSvg => self
+                .requests
+                .push(AppRequest::ExportFormat(crate::io::export::Format::Svg)),
+            A::ExportPdf => self
+                .requests
+                .push(AppRequest::ExportFormat(crate::io::export::Format::Pdf)),
+            A::CopyAsPng => self.requests.push(AppRequest::CopyAsPng),
+            A::CopyAsSvg => self.copy_as_svg(),
             A::ToggleSnapping => {
                 self.snapping = !self.snapping;
                 self.status = format!("Snapping {}", if self.snapping { "on" } else { "off" });
@@ -2042,7 +2057,111 @@ impl Editor {
         self.selection.clear();
     }
 
+    /// Copy to the internal clipboard and, when available, the system clipboard.
     fn copy(&mut self) {
+        self.copy_internal();
+        if self.clipboard_roots.is_empty() {
+            return;
+        }
+        if let Some(io) = &mut self.clipboard_io {
+            let text = crate::io::clipboard::encode(
+                &self.clipboard,
+                &self.clipboard_roots,
+                &self.clipboard_world,
+                self.clipboard_page.as_deref(),
+            );
+            io.write_text(&text);
+            self.clipboard_written = Some(text);
+        }
+    }
+
+    /// Paste from the system clipboard when it holds something newer than our own copy
+    /// (layers from another window, Excalidraw JSON, SVG, an image or text); otherwise from
+    /// the internal clipboard.
+    pub fn paste_from_clipboard(&mut self) {
+        use crate::io::clipboard::{self, Content};
+        let external = self.clipboard_io.as_mut().and_then(|io| io.read_text());
+        let center = self.camera.screen_to_world(self.viewport * 0.5);
+        match external {
+            Some(t) if self.clipboard_written.as_deref() != Some(t.as_str()) => {
+                match clipboard::decode(&t) {
+                    Content::Layers(p) => {
+                        let same = p.page.as_deref() == Some(self.active_page_id());
+                        let d = if same { PASTE_OFFSET } else { 0.0 };
+                        let ids = self.insert_subtrees(
+                            "Paste",
+                            &p.nodes,
+                            &p.roots,
+                            &p.world,
+                            v2(d, d),
+                            false,
+                        );
+                        self.selection = ids;
+                    }
+                    Content::Foreign(nodes, what) => {
+                        let (roots, world) = clipboard::roots_of(&nodes);
+                        let off = clipboard::center_offset(&world, center);
+                        let ids = self.insert_subtrees(
+                            &format!("Paste {what}"),
+                            &nodes,
+                            &roots,
+                            &world,
+                            off,
+                            false,
+                        );
+                        self.status = format!("Pasted {} layer(s) from {what}", ids.len());
+                        self.selection = ids;
+                    }
+                    Content::Text(t) if !t.trim().is_empty() => {
+                        let mut n =
+                            crate::demo::text_node(t.trim_end(), 16.0, center.round(), Color::INK);
+                        n.name = t
+                            .lines()
+                            .next()
+                            .unwrap_or("Text")
+                            .chars()
+                            .take(24)
+                            .collect();
+                        let id = self.add_node(n, None);
+                        self.selection = vec![id];
+                    }
+                    Content::Text(_) => {}
+                }
+            }
+            _ => {
+                let image = if external.is_none() {
+                    self.clipboard_io.as_mut().and_then(|io| io.read_image())
+                } else {
+                    None
+                };
+                if let Some(img) = image {
+                    let id = crate::assets::register_rgba(&img);
+                    self.insert_image(&id, center);
+                    return;
+                }
+                // Same page: offset so the copy is visible. Another page or project: keep
+                // the position, as in Figma.
+                let same = self.clipboard_page.as_deref() == Some(self.active_page_id());
+                let d = if same { PASTE_OFFSET } else { 0.0 };
+                self.paste(v2(d, d))
+            }
+        }
+    }
+
+    /// Put the selection on the clipboard as SVG markup.
+    pub fn copy_as_svg(&mut self) {
+        let roots = self.top_selection();
+        if let Some(svg) =
+            crate::io::svg::export(&self.doc, (!roots.is_empty()).then_some(&roots[..]), None)
+            && let Some(io) = &mut self.clipboard_io
+        {
+            io.write_text(&svg);
+            self.clipboard_written = Some(svg);
+            self.status = "Copied as SVG".into();
+        }
+    }
+
+    fn copy_internal(&mut self) {
         let roots = self.top_selection();
         if roots.is_empty() {
             return;

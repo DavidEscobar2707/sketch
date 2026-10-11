@@ -2199,6 +2199,7 @@ dependencies = [
 name = "paper-rs"
 version = "0.1.0"
 dependencies = [
+ "arboard",
  "bytemuck",
  "dirs",
  "egui",
@@ -2210,6 +2211,7 @@ dependencies = [
  "image",
  "log",
  "lyon",
+ "miniz_oxide 0.9.1",
  "muda",
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
@@ -2221,6 +2223,7 @@ dependencies = [
  "serde",
  "serde_json",
  "ttf-parser",
+ "usvg",
  "wgpu",
  "winit",
 ]

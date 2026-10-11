@@ -145,6 +145,8 @@ pub fn panel(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
             let ids = ed.top_selection();
             if ids.is_empty() {
                 nothing_selected(ui, ed);
+                separator(ui);
+                export_section(ui, ed, st);
                 return;
             }
             let first = ed.doc.get(ids[0]).cloned().unwrap();
@@ -194,7 +196,8 @@ pub fn panel(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                 separator(ui);
                 sketch_section(ui, ed, &ids, &first);
             }
-            let _ = st;
+            separator(ui);
+            export_section(ui, ed, st);
         });
 }
 
@@ -372,6 +375,74 @@ fn sketch_section(ui: &mut Ui, ed: &mut Editor, ids: &[NodeId], first: &Node) {
             }
         });
     }
+}
+
+/// Export settings and button, like Figma's Export section.
+fn export_section(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
+    use crate::io::export::{Format, Scope};
+    ui.label(title_text("Export"));
+    let spec = &mut st.export;
+    ui.horizontal(|ui| {
+        let fmts: Vec<(Format, &str)> = Format::ALL
+            .iter()
+            .map(|f| {
+                (
+                    *f,
+                    match f {
+                        Format::Png => "PNG",
+                        Format::Svg => "SVG",
+                        Format::Pdf => "PDF",
+                    },
+                )
+            })
+            .collect();
+        if let Some(v) = combo(ui, "exp-format", spec.format, &fmts, 64.0) {
+            spec.format = v;
+        }
+        if spec.format == Format::Png {
+            let scales = [(1u8, "1x"), (2, "2x"), (3, "3x"), (4, "4x")];
+            if let Some(v) = combo(ui, "exp-scale", spec.scale as u8, &scales, 48.0) {
+                spec.scale = v as f64;
+            }
+        }
+    });
+    let scopes: Vec<(Scope, &str)> = Scope::ALL.iter().map(|s| (*s, s.label())).collect();
+    row(ui, "Export", |ui| {
+        if let Some(v) = combo(ui, "exp-scope", spec.scope, &scopes, 110.0) {
+            spec.scope = v;
+        }
+    });
+    if spec.format != Format::Svg || spec.transparent {
+        ui.checkbox(&mut spec.transparent, "Transparent background");
+    }
+    let what = match (spec.scope, ed.top_selection().len()) {
+        (Scope::Selection, 0) => format!("page “{}”", ed.page_name()),
+        (Scope::Selection, 1) => ed
+            .doc
+            .get(ed.top_selection()[0])
+            .map_or("selection".into(), |n| format!("“{}”", n.name)),
+        (Scope::Selection, n) => format!("{n} layers"),
+        (Scope::Frames, _) => "each frame".into(),
+        (Scope::Page, _) => format!("page “{}”", ed.page_name()),
+        (Scope::AllPages, _) => format!("{} pages", ed.pages.len()),
+    };
+    if ui
+        .add(
+            egui::Button::new(format!("Export {what}…"))
+                .min_size(egui::vec2(ui.available_width(), 24.0)),
+        )
+        .clicked()
+    {
+        ed.requests.push(AppRequest::Export(*spec));
+    }
+    ui.horizontal(|ui| {
+        if ui.small_button("Copy as PNG").clicked() {
+            ed.run(crate::editor::shortcuts::Action::CopyAsPng);
+        }
+        if ui.small_button("Copy as SVG").clicked() {
+            ed.run(crate::editor::shortcuts::Action::CopyAsSvg);
+        }
+    });
 }
 
 fn nothing_selected(ui: &mut Ui, ed: &mut Editor) {

@@ -17,7 +17,32 @@ are credited in `THIRD_PARTY.md`.
 | P3: Figma core | ✅ done | `src/layout.rs`, `src/editor/{structure,vector_ops,text_edit}.rs`, `src/render/{draw,tess}.rs`, `src/ui/inspector.rs`, `tests/figma.rs`, `tests/perf.rs`, `milestone3_figma_core.png`, `milestone3_canvas.png` |
 | P4: Excalidraw core | ✅ done | `src/render/rough.rs`, `src/connector.rs`, `src/editor/whiteboard.rs`, `src/library.rs`, `src/ui/library.rs`, `tests/excalidraw.rs`, `milestone4_whiteboard.png`, `THIRD_PARTY.md` |
 | P5: inspector, layers drag-reorder, command palette, shortcuts | ✅ done | `src/ui/{inspector,palette}.rs`, `src/ui/mod.rs` (layers drag, help), `src/editor/{commands,shortcuts}.rs`, `src/macos.rs`, `tests/workflow.rs`, `milestone5_palette.png`, `milestone5_shortcuts.png`, `milestone5_inspector.png` |
-| P6: import/export (PNG/SVG/PDF, .excalidraw, SVG), cross-project paste | ⏳ | |
+| P6: import/export (PNG/SVG/PDF, .excalidraw, SVG), cross-project paste | ✅ done | `src/io/{pdf,export,excalidraw,svg_import,clipboard}.rs`, inspector Export section, CLI `--export*`/`--import`, `tests/io.rs`, `milestone6_*.png` |
+
+### P6 notes
+
+* **Export** (`io/export.rs`): scope = selection, each frame, page or all pages; format =
+  PNG (1–4x, transparent or white), SVG or PDF. Several PNG/SVG outputs go into a chosen
+  folder (named after the frames/pages); PDF is always one file with one page per item.
+  Inspector Export section, ⌘⇧E / ⌘⌥⇧E / ⌘⌥P, copy as PNG (⌘⇧C) / SVG, and the CLI.
+* **PDF** (`io/pdf.rs`): hand-written PDF 1.7 writer over the shared draw ops — paths
+  (quadratics elevated), solid fills, axial/radial shadings (stitched functions for 3+
+  stops), images as Flate-compressed RGB XObjects with an alpha soft mask, strokes with
+  caps/joins/dashes, ExtGState opacity and all 16 blend modes, frame clipping. Verified by
+  structure tests and by rasterizing with pdftoppm.
+* **Excalidraw import** (`io/excalidraw.rs`): scenes and clipboard JSON (rectangles,
+  ellipses, diamonds, text, lines, arrows with bindings/elbows/heads, freedraw with
+  pressures, images from `files`, frames, sticky notes with their text, groups → group
+  layers, rotation baked into paths, hand-drawn style kept with the element's seed and fill
+  style); `.excalidrawlib` v1/v2 into the library.
+* **SVG import** (`io/svg_import.rs`, usvg): paths with transforms, fills (solid, linear,
+  radial), strokes, opacity, embedded raster images, nested SVG and text outlined with Inter.
+* **Clipboard** (`io/clipboard.rs`): copy writes a `paper-rs/clipboard` JSON payload with
+  image bytes to the system clipboard (arboard), so layers paste between pages, projects,
+  windows and restarts; paste also takes Excalidraw JSON, SVG markup, images and plain text.
+  Our own last copy pastes from the internal clipboard (offset on the same page).
+* Drag-and-drop of `.svg`, `.excalidraw`, `.excalidrawlib` and images onto the canvas, and
+  ⌘O imports into the current page.
 
 ### P5 notes
 
@@ -119,6 +144,20 @@ are credited in `THIRD_PARTY.md`.
   loop sleeps until the autosave deadline, so idle CPU stays at zero. Thumbnails refresh at most
   every 20 s and when leaving the project.
 * Known gap: typing inside an open text edit is saved when the edit ends (it is one undo step).
+
+### Phase 3 verification log (2026-10-11)
+
+* `cargo build --release`: no warnings. `cargo clippy --all-targets`: clean. `cargo fmt`.
+* `cargo test`: 99 unit tests + 42 integration tests (projects, figma, excalidraw, workflow,
+  io, perf, headless), all passing; GPU tests on Mesa lavapipe.
+* `cargo check --target aarch64-apple-darwin` and `--target x86_64-pc-windows-gnu` pass
+  (the macOS menu is generated from the shared menu table and type-checks).
+* Real window under Xvfb: idle CPU measured from `/proc/<pid>/stat` over 5 s after startup —
+  0 ticks on the home screen and 0 ticks in the editor. Autosave, tooltips and the laser
+  trail wake the loop only while they need to.
+* 10k elements (`tests/perf.rs`, release): cached frame ~3 ms, first frame at a new zoom
+  octave ~140 ms, one edited node re-tessellates one node, panning uploads nothing.
+* Not yet run on Mac hardware (no Mac available to this session); see README Known gaps.
 
 ## Phase 2 (paper-rs 0.1) record
 
