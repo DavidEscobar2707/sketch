@@ -90,6 +90,75 @@ paper-rs --export out_dir PROJECT_DIR --format png --scope frames  # a folder of
 paper-rs --import board.excalidraw                                 # new project, prints its folder
 ```
 
+## AI agents (MCP)
+
+![A sign-in screen written by an agent through write_html](docs/screenshots/milestone7_mcp.png)
+
+paper-rs serves the [Model Context Protocol](https://modelcontextprotocol.io) while it runs, so
+agents such as Claude Code and Codex can read and design on the open canvas, the way Paper's
+own MCP server works (behaviour notes: `analysis/paper-mcp.md`). Every tool call runs through
+the editor like a user edit: one undo step per call, and the window repaints immediately.
+
+* **Streamable HTTP** (built into the app): `http://127.0.0.1:29980/mcp`. Paper uses 29979, so
+  both can run. Loopback only; requests from browsers (with an `Origin` header) and foreign
+  `Host` headers are rejected. `PAPER_RS_MCP_PORT=NNNN` changes the port; `PAPER_RS_MCP=0`
+  turns the server off.
+* **stdio**: `paper-rs-mcp` (built next to `paper-rs`) relays stdio to the running app. It
+  lists the tools even when the app is closed, and tells the agent to start paper-rs if a
+  call can't reach it.
+
+### Claude Code
+
+```sh
+# HTTP (the app must be running)
+claude mcp add --transport http --scope user paper-rs http://127.0.0.1:29980/mcp
+# or stdio through the bridge
+claude mcp add --scope user paper-rs -- /path/to/paper-rs/target/release/paper-rs-mcp
+```
+
+### Codex
+
+```sh
+# HTTP
+codex mcp add paper-rs --url http://127.0.0.1:29980/mcp
+# or stdio
+codex mcp add paper-rs -- /path/to/paper-rs/target/release/paper-rs-mcp
+```
+
+which writes this to `~/.codex/config.toml` (either form works):
+
+```toml
+[mcp_servers.paper-rs]
+url = "http://127.0.0.1:29980/mcp"
+# command = "/path/to/paper-rs/target/release/paper-rs-mcp"
+```
+
+Then ask the agent something like *"In paper-rs, create a 390×844 mobile artboard and design a
+sign-in screen"*, or *"draw a flowchart of our deploy process on a new page, hand-drawn
+style"*.
+
+### Tools
+
+Names and arguments follow Paper's MCP server where paper-rs has an equivalent, so prompts
+written for Paper work here too.
+
+| Group | Tools |
+|---|---|
+| Projects & pages | `list_resources`, `open_file`, `create_file`, `create_page`, `rename_pages` |
+| Read | `get_basic_info`, `get_selection`, `get_node_info`, `get_children`, `get_tree_summary`, `get_computed_styles`, `get_jsx`, `find_nodes`, `get_fill_image`, `get_font_family_info`, `get_guide` |
+| See | `get_screenshot` (PNG image content of a node or the page), `export` (PNG/SVG/PDF files), `export_combined_pdf` |
+| Write | `create_artboard`, `write_html`, `update_styles`, `set_text_content`, `rename_nodes`, `duplicate_nodes`, `move_nodes`, `delete_nodes`, `finish_working_on_nodes` (saves) |
+| paper-rs extras | `create_shape` (rectangles, ellipses, diamonds, stars, stickies, text, lines, arrows bound to shapes), `select_nodes`, `undo`, `redo` |
+
+`write_html` takes HTML with inline styles: flexbox (`display:flex`, direction, gap, padding,
+alignment, `flex-grow`, wrap) and block stacking map onto auto layout with CSS's stretch rules;
+text gets size, weight, italic, color, line height, letter spacing, alignment and rich-text
+runs (`<b>`, `<i>`, `<span style>`); boxes get backgrounds (colors, gradients, images),
+borders, radii, opacity and blend modes; `<img>` takes local paths or `data:` URIs and `<svg>`
+is imported as vectors. `update_styles` takes the same CSS as JSON, plus the hand-drawn keys
+`sketch`, `roughness`, `fillStyle`, `strokeStyle`. Node ids look like `3fa9c1:14` (page and
+node); `pageId` lets an agent work on another page without switching the user's view.
+
 ## Tests
 
 ```sh
@@ -107,7 +176,8 @@ cargo test --release --test perf -- --nocapture   # 10k-element frame timings
   `tests/figma.rs` (groups, components, auto layout, constraints, pen, booleans, rich text,
   guides), `tests/excalidraw.rs` (hand-drawn style, arrows, quick-connect, stickies, laser,
   library), `tests/workflow.rs` (layers drag, palette, shortcuts), `tests/io.rs` (export,
-  import, clipboard, CLI).
+  import, clipboard, CLI), `tests/mcp.rs` (every MCP tool on a headless session, then an rmcp
+  client over HTTP and through the `paper-rs-mcp` stdio bridge).
 * **Headless GPU tests** render through wgpu, assert pixels and write the screenshots below.
   One rasterizes the SVG export with resvg and compares it with the GPU render; one renders
   the PDF export with pdftoppm when installed.
@@ -120,6 +190,7 @@ cargo test --release --test perf -- --nocapture   # 10k-element frame timings
 | 4. Excalidraw core | `milestone4_whiteboard.png` |
 | 5. Inspector, palette, shortcuts | `milestone5_inspector.png`, `milestone5_palette.png`, `milestone5_shortcuts.png` |
 | 6. Import / export | `milestone6_pdf_page.png` (PDF rasterized by pdftoppm), `milestone6_excalidraw_import.png`, `milestone6_svg_import.png` |
+| 7. MCP server | `milestone7_mcp.png` (a screen written through `write_html`, captured with `get_screenshot`), `milestone7_mcp_live_xvfb.png` (the live app after Claude Code drew into it over the stdio bridge) |
 | paper-rs 0.1 | `m1_*` … `m6_*`, `app_demo.png`, `x11_window_xvfb.png` |
 
 ## Using it
@@ -199,7 +270,8 @@ Known gaps), ⏳ planned in a later milestone, ❌ not planned.
 | Export PNG / SVG / PDF of selection, frame, page | ✓ | ✓ | ✓ (PNG/SVG) | ✅ Selection, each frame, page or all pages; vector PDF with gradients, images, blend modes; copy as PNG/SVG |
 | Import .excalidraw / SVG, copy-paste across projects | – | ✓ (SVG) | ✓ | ✅ .excalidraw scenes, .excalidrawlib libraries, SVG (paths, gradients, images, text), system clipboard between pages, projects and apps |
 | Freehand ink with pressure | – | (pencil) | ✓ | ✅ Smoothing, pressure, eraser |
-| Multiplayer, cloud sync, plugins, MCP | ✓ | ✓ | ✓ | ❌ local-first by design |
+| MCP server for AI agents | ✓ | ✓ (Dev Mode) | ✓ (community) | ✅ Streamable HTTP in the app + stdio bridge; Paper-compatible tool names, `write_html`, screenshots, whiteboard shapes |
+| Multiplayer, cloud sync, plugins | ✓ | ✓ | ✓ | ❌ local-first by design |
 
 ## Known gaps
 
@@ -232,6 +304,11 @@ Known gaps), ⏳ planned in a later milestone, ❌ not planned.
 * **Import**: Excalidraw rotation is baked into paths (text rotation is dropped), bound text
   inside shapes stays a separate text layer (except sticky notes), and fonts map to Inter.
   SVG patterns, filters, masks and clip paths are not imported.
+* **MCP**: one project is open at a time, so `fileId` must name the open project (call
+  `open_file` to switch; the user's window switches too). No design tokens, comments or AI
+  image generation (Paper has them). Moving or duplicating layers between pages isn't
+  supported. Remote `http(s)` images aren't fetched; pass a local path or a `data:` URI.
+  CSS margin, grid, shadows and transforms are reported back as ignored styles.
 * **Linux file dialogs** need an XDG desktop portal. Without one, Save/Open dialogs return
   nothing. The headless CLI is unaffected.
 
@@ -256,6 +333,8 @@ src/connector.rs   arrow bindings, elbow router, arrowheads
 src/library.rs     shared shape library
 src/ui/            home screen, pages, layers, inspector
 src/app.rs         winit application
+src/mcp/           MCP server (rmcp): tools, HTML/CSS mapping, HTTP service
+src/bin/paper-rs-mcp.rs  stdio bridge to the running app
 analysis/          reverse-engineering findings and design (raw dumps are gitignored)
 docs/screenshots/  headless renders produced by `cargo test`
 ```

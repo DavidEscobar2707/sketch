@@ -1,6 +1,6 @@
 # Progress
 
-Last updated: 2026-10-10.
+Last updated: 2026-10-11.
 
 ## Phase 3: local-first design and whiteboard tool
 
@@ -18,6 +18,63 @@ are credited in `THIRD_PARTY.md`.
 | P4: Excalidraw core | ✅ done | `src/render/rough.rs`, `src/connector.rs`, `src/editor/whiteboard.rs`, `src/library.rs`, `src/ui/library.rs`, `tests/excalidraw.rs`, `milestone4_whiteboard.png`, `THIRD_PARTY.md` |
 | P5: inspector, layers drag-reorder, command palette, shortcuts | ✅ done | `src/ui/{inspector,palette}.rs`, `src/ui/mod.rs` (layers drag, help), `src/editor/{commands,shortcuts}.rs`, `src/macos.rs`, `tests/workflow.rs`, `milestone5_palette.png`, `milestone5_shortcuts.png`, `milestone5_inspector.png` |
 | P6: import/export (PNG/SVG/PDF, .excalidraw, SVG), cross-project paste | ✅ done | `src/io/{pdf,export,excalidraw,svg_import,clipboard}.rs`, inspector Export section, CLI `--export*`/`--import`, `tests/io.rs`, `milestone6_*.png` |
+| P7: MCP server for AI agents (Paper-compatible tools, HTTP + stdio bridge) | ✅ done on Linux; ⏳ Mac run pending (steps below) | `analysis/paper-mcp.md`, `src/mcp/`, `src/bin/paper-rs-mcp.rs`, `tests/mcp.rs`, `milestone7_mcp.png`, `milestone7_mcp_live_xvfb.png` |
+
+### P7 notes: MCP server
+
+* **Study** (`analysis/paper-mcp.md`): Paper's desktop app serves MCP over streamable HTTP on
+  `127.0.0.1:29979/mcp` (hono + MCP SDK), forwards calls into the renderer's editor, guards
+  against browsers and DNS rebinding, and ships a Go `paper mcp` stdio relay. 29 tools; the
+  write path is `write_html` (HTML + inline CSS → layers) and `update_styles` (CSS maps).
+  Studied with REA (behaviour only; raw dumps in gitignored `analysis/raw/`).
+* **Server** (`src/mcp/server.rs`, rmcp 3.5): streamable HTTP on `127.0.0.1:29980/mcp`
+  (`PAPER_RS_MCP_PORT`, `PAPER_RS_MCP=0` to disable), on its own Tokio thread. Calls are sent
+  to the winit loop (`UserEvent::Mcp`) and run on the UI thread via `mcp::exec`, each as one
+  `Editor::edit` transaction (one undo step, live repaint, autosave). Edits to other pages go
+  to that page's own document and history (`Editor::with_page`) without switching the view.
+* **Bridge** (`paper-rs-mcp`): rmcp stdio server that lists tools offline and relays calls to
+  the app over HTTP, reconnecting after app restarts.
+* **Tools** (`src/mcp/tools.rs`): Paper's names and argument shapes where there is an
+  equivalent (see README), plus `create_shape`, `select_nodes`, `undo`, `redo`.
+  `write_html` (`src/mcp/{html,css}.rs`, `exec.rs` `Builder`) maps flex/block layout onto auto
+  layout with CSS stretch semantics, text styles and rich-text runs, backgrounds, gradients,
+  borders, images, inline SVG and clones.
+* **Verified**: `tests/mcp.rs` (12 tests: every tool on a headless session, rmcp client over
+  HTTP and through the bridge, browser/Origin rejection, a raw 2026-07-28 request through the
+  bridge, screenshots). End to end on Linux: the real app under Xvfb, driven by **Claude Code**
+  (`claude -p` with the server added over HTTP, then over the stdio bridge) drew a frame with
+  a heading, paragraph, button and sticky note that appeared live in the window
+  (`docs/screenshots/milestone7_mcp_live_xvfb.png`). That run found a bug the rmcp-only tests
+  missed (bridge results lacked `resultType` for 2026-07-28 clients), fixed in `01e0836`.
+  The macOS target type-checks (`cargo check --target aarch64-apple-darwin --all-targets`).
+* **Mac verification steps** (not run here: no access to the Mac from this machine). In
+  `/Users/Shared/projects/paper-rs` on the Mac:
+
+  ```sh
+  export CARGO_TARGET_DIR=~/.cache/paper-rs-target   # keep build output out of the synced tree
+  cargo build --release
+  $CARGO_TARGET_DIR/release/paper-rs &               # app; log says "MCP server listening on http://127.0.0.1:29980/mcp"
+  curl -s http://127.0.0.1:29980/x                   # → {"status":"not_found",...The MCP endpoint is /mcp."}
+
+  # HTTP client
+  claude mcp add --transport http --scope user paper-rs http://127.0.0.1:29980/mcp
+  claude -p "Use the paper-rs MCP tools: create_file 'Mac check', open_file it, create a 480x320 \
+    artboard 'Hello', and write_html a heading 'Hello from the Mac' into it." \
+    --allowedTools "mcp__paper-rs__*"
+  # stdio client (through the bridge)
+  claude mcp remove paper-rs --scope user
+  claude mcp add --scope user paper-rs -- $CARGO_TARGET_DIR/release/paper-rs-mcp
+  claude -p "In paper-rs, add a yellow sticky note saying 'stdio works' next to the Hello artboard." \
+    --allowedTools "mcp__paper-rs__*"
+  # Codex works the same way:
+  #   codex mcp add paper-rs --url http://127.0.0.1:29980/mcp
+  #   codex mcp add paper-rs -- $CARGO_TARGET_DIR/release/paper-rs-mcp
+  ```
+
+  Done when the "Mac check" project is open in the window with the "Hello" frame and its
+  heading (and the sticky note) visible, and ⌘Z removes each agent edit in one step.
+* **Not carried over**: comments, design tokens, AI image generation, video export, teams;
+  moving layers between pages; remote image URLs (see README Known gaps).
 
 ### P6 notes
 
