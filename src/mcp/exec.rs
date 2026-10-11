@@ -255,7 +255,9 @@ pub fn call(host: &mut dyn Host, name: &str, args: &Value) -> ToolResult {
             check_file(host, &a)?;
             let ed = host.editor();
             ed.commit_pending();
-            match name {
+            // The first content on the page the user is looking at is brought into view.
+            let was_empty = ed.doc.root.is_empty();
+            let r = match name {
                 "create_page" => create_page(ed, &a),
                 "rename_pages" => rename_pages(ed, &a),
                 "get_basic_info" => basic_info(host, &a),
@@ -286,7 +288,12 @@ pub fn call(host: &mut dyn Host, name: &str, args: &Value) -> ToolResult {
                     text(json!({"ok": true, "saved": host.project().is_some()}))
                 }
                 _ => Err(format!("unknown tool `{name}`")),
+            };
+            let ed = host.editor();
+            if r.is_ok() && was_empty && !ed.doc.root.is_empty() {
+                ed.zoom_to_fit();
             }
+            r
         }
     }
 }
