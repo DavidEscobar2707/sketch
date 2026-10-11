@@ -12,8 +12,8 @@ layers panel, transactional undo/redo, a local `.paper-rs` file format, and PNG/
 > **Clean-room note.** `analysis/PAPER_ARCHITECTURE.md` documents how Paper Desktop 0.5.15 is
 > put together, from a licensed install. The Electron package turned out to be a thin shell
 > around the hosted web editor. paper-rs re-implements *behavior* only. No Paper code,
-> shaders, icons, fonts or assets are used or committed. Canvas text uses egui's bundled
-> Ubuntu Light font (Ubuntu Font Licence).
+> shaders, icons, fonts or assets are used or committed. The UI and canvas text use
+> [Inter](https://rsms.me/inter/) 4.1 (SIL OFL 1.1), bundled in `assets/fonts/`.
 
 ## Build and run
 
@@ -168,7 +168,7 @@ means requested in the project brief rather than observed.
 * **Pen pressure.** winit 0.30 does not expose tablet pressure for pen events that arrive as
   mouse input, which is common with macOS and Wacom tablets. Pressure comes from touch/pen
   `force` when the platform reports it. Otherwise it is simulated from stroke velocity.
-* **Text** is single-font (Ubuntu Light) with no shaping, so there are no ligatures, no complex
+* **Text** is single-font (Inter Regular) with no shaping, so there are no ligatures, no complex
   scripts and no RTL. There is no in-text selection range and no up/down caret movement, and
   IME preedit is not displayed (committed text works).
 * **No rotation, boolean operations, bezier pen tool or images.** Opacity on a frame
@@ -199,5 +199,5 @@ docs/screenshots/  headless renders produced by `cargo test`
 
 ## License
 
-MIT OR Apache-2.0 for the code in this repository. Canvas text uses the Ubuntu Font (Ubuntu
-Font Licence 1.0) via egui's `epaint_default_fonts`.
+MIT OR Apache-2.0 for the code in this repository. Inter (Regular, Medium, SemiBold) is
+© The Inter Project Authors under the SIL Open Font License 1.1; see `assets/fonts/OFL.txt`.

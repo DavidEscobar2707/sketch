@@ -1,7 +1,7 @@
 //! Text layout and glyph outlines.
 //!
 //! Text is rendered as vector glyph outlines, so it stays crisp at every zoom level and
-//! exports to SVG without font dependencies. The face is egui's bundled Ubuntu Light (OFL/UFL),
+//! exports to SVG without font dependencies. The face is Inter Regular (SIL OFL, bundled in assets/fonts),
 //! not anything taken from Paper.
 
 use crate::geom::{V2, v2};
@@ -11,7 +11,7 @@ use lyon::tessellation::{BuffersBuilder, FillOptions, FillTessellator, FillVerte
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
-pub static FONT_BYTES: &[u8] = epaint_default_fonts::UBUNTU_LIGHT;
+pub static FONT_BYTES: &[u8] = crate::theme::INTER_REGULAR;
 
 pub fn face() -> &'static ttf_parser::Face<'static> {
     static FACE: OnceLock<ttf_parser::Face<'static>> = OnceLock::new();

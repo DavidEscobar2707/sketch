@@ -5,10 +5,11 @@ use crate::geom::{V2, v2};
 use crate::io::{file, png, svg};
 use crate::model::{Color, Document};
 use crate::render::frame::{self, Painter};
+use crate::theme;
 use crate::ui::{self, UiState};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, TouchPhase, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
@@ -34,11 +35,23 @@ pub struct App {
     canvas: egui::Rect,
     captured: bool,
     title: String,
+    /// When egui asked for a delayed repaint (tooltips, caret blink, animations).
+    next_repaint: Option<Instant>,
+    #[cfg(target_os = "macos")]
+    menu: Option<crate::macos::NativeMenu>,
+}
+
+/// Events delivered to the winit loop from other sources.
+#[derive(Debug)]
+pub enum UserEvent {
+    #[cfg(target_os = "macos")]
+    Menu(muda::MenuId),
 }
 
 impl App {
     pub fn new(ed: Editor) -> App {
         let ctx = egui::Context::default();
+        theme::set_accent(theme::system_accent());
         ui::setup_style(&ctx);
         App {
             gfx: None,
@@ -49,6 +62,9 @@ impl App {
             canvas: egui::Rect::NOTHING,
             captured: false,
             title: String::new(),
+            next_repaint: None,
+            #[cfg(target_os = "macos")]
+            menu: None,
         }
     }
 
@@ -204,6 +220,11 @@ impl App {
         let input = g.egui.take_egui_input(&g.window);
         let mut l = frame::layout(&self.ctx, input, &mut self.ed, &mut self.st);
         self.canvas = l.canvas;
+        let repaint_delay = l
+            .output
+            .viewport_output
+            .get(&egui::ViewportId::ROOT)
+            .map_or(Duration::MAX, |v| v.repaint_delay);
         let platform = std::mem::take(&mut l.output.platform_output);
         g.egui.handle_platform_output(&g.window, platform);
 
@@ -211,8 +232,9 @@ impl App {
             wgpu::CurrentSurfaceTexture::Success(f)
             | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
             wgpu::CurrentSurfaceTexture::Occluded => {
-                // macOS reports Occluded until the window is on screen. Keep egui's texture
-                // state in sync, but don't spin: WindowEvent::Occluded(false) triggers a redraw.
+                // macOS reports Occluded until the window is on screen (and while it is
+                // hidden). Keep egui's texture state in sync, but don't spin:
+                // WindowEvent::Occluded(false) triggers a redraw.
                 log::debug!("surface occluded; skipping frame");
                 g.painter
                     .skip_frame(&g.device, &g.queue, &mut l.output.textures_delta);
@@ -227,6 +249,13 @@ impl App {
                 return;
             }
         };
+        // AppKit re-lays out the titlebar (first show, fullscreen, resize) and puts the
+        // traffic lights back; re-inset them (a no-op when already in place).
+        #[cfg(target_os = "macos")]
+        {
+            let (x, y) = theme::TRAFFIC_LIGHTS;
+            crate::macos::inset_traffic_lights(&g.window, x, y);
+        }
         let view = frame.texture.create_view(&Default::default());
         let size = [g.config.width, g.config.height];
         g.painter.paint(
@@ -252,9 +281,86 @@ impl App {
             self.title = title;
         }
         self.handle_requests();
-        if (self.ctx.has_requested_repaint() || !self.ed.requests.is_empty())
-            && let Some(g) = &self.gfx
-        {
+        self.sync_menu();
+        // Repaint only when egui wants it: immediately (an animation is running or state just
+        // changed), after a delay (tooltip, caret blink), or never (idle; input wakes us).
+        let Some(g) = &self.gfx else { return };
+        if log::log_enabled!(log::Level::Trace) {
+            log::trace!(
+                "frame: repaint in {repaint_delay:?}, causes {:?}",
+                self.ctx.repaint_causes()
+            );
+        }
+        if repaint_delay.is_zero() || !self.ed.requests.is_empty() {
+            g.window.request_redraw();
+            self.next_repaint = None;
+        } else if repaint_delay < Duration::from_secs(3600) {
+            self.next_repaint = Some(Instant::now() + repaint_delay);
+        } else {
+            self.next_repaint = None;
+        }
+    }
+
+    /// Keep the native menu's check marks in step with the editor.
+    fn sync_menu(&mut self) {
+        #[cfg(target_os = "macos")]
+        if let Some(m) = &self.menu {
+            let set = |item: &muda::CheckMenuItem, v: bool| {
+                if item.is_checked() != v {
+                    item.set_checked(v);
+                }
+            };
+            set(&m.snapping, self.ed.snapping);
+            set(&m.grid, !self.st.show_grid_off);
+            set(&m.help, self.st.show_help);
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn menu_command(&mut self, event_loop: &ActiveEventLoop, cmd: crate::macos::MenuCmd) {
+        use crate::editor::shortcuts::Action as A;
+        use crate::macos::MenuCmd;
+        match cmd {
+            MenuCmd::Quit => {
+                if self.confirm_discard() {
+                    event_loop.exit();
+                }
+            }
+            MenuCmd::ToggleGrid => self.st.show_grid_off = !self.st.show_grid_off,
+            MenuCmd::ToggleHelp => self.st.show_help = !self.st.show_help,
+            // Menu key equivalents never reach egui, so while a text field is focused, hand
+            // the standard editing commands to it instead of the canvas.
+            MenuCmd::Run(a @ (A::Undo | A::Redo | A::Cut | A::Copy | A::Paste | A::SelectAll))
+                if self.ctx.egui_wants_keyboard_input() =>
+            {
+                let Some(g) = self.gfx.as_mut() else { return };
+                let key = |key, shift: bool| egui::Event::Key {
+                    key,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: if shift {
+                        egui::Modifiers::COMMAND | egui::Modifiers::SHIFT
+                    } else {
+                        egui::Modifiers::COMMAND
+                    },
+                };
+                let ev = match a {
+                    A::Cut => egui::Event::Cut,
+                    A::Copy => egui::Event::Copy,
+                    A::Paste => match g.egui.clipboard_text() {
+                        Some(t) => egui::Event::Paste(t),
+                        None => return,
+                    },
+                    A::Undo => key(egui::Key::Z, false),
+                    A::Redo => key(egui::Key::Z, true),
+                    _ => key(egui::Key::A, false),
+                };
+                g.egui.egui_input_mut().events.push(ev);
+            }
+            MenuCmd::Run(a) => self.ed.run(a),
+        }
+        if let Some(g) = &self.gfx {
             g.window.request_redraw();
         }
     }
@@ -287,7 +393,7 @@ fn map_key(k: &WKey) -> Option<Key> {
     })
 }
 
-impl ApplicationHandler for App {
+impl ApplicationHandler<UserEvent> for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.gfx.is_some() {
             return;
@@ -296,8 +402,29 @@ impl ApplicationHandler for App {
             .with_title("paper-rs")
             .with_inner_size(winit::dpi::LogicalSize::new(1440.0, 900.0))
             .with_min_inner_size(winit::dpi::LogicalSize::new(720.0, 480.0));
+        // PAPER_RS_OPAQUE=1 turns off vibrancy (and window transparency) on macOS.
+        #[cfg(target_os = "macos")]
+        let translucent = std::env::var_os("PAPER_RS_OPAQUE").is_none();
+        #[cfg(target_os = "macos")]
+        let attrs = {
+            use winit::platform::macos::WindowAttributesExtMacOS;
+            // Unified, title-less toolbar look: content runs under a transparent titlebar.
+            attrs
+                .with_titlebar_transparent(true)
+                .with_fullsize_content_view(true)
+                .with_title_hidden(true)
+                .with_transparent(translucent)
+        };
         let window = Arc::new(event_loop.create_window(attrs).expect("create window"));
         window.set_ime_allowed(true);
+        #[cfg(target_os = "macos")]
+        {
+            self.st.translucent_sidebar = translucent && crate::macos::apply_vibrancy(&window);
+            self.st.native_chrome = true;
+            let (x, y) = theme::TRAFFIC_LIGHTS;
+            crate::macos::inset_traffic_lights(&window, x, y);
+            self.menu = Some(crate::macos::install_menu());
+        }
         let instance =
             wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
         let surface = instance
@@ -316,6 +443,7 @@ impl ApplicationHandler for App {
         }))
         .expect("create device");
         let caps = surface.get_capabilities(&adapter);
+        log::info!("surface alpha modes: {:?}", caps.alpha_modes);
         let format = caps
             .formats
             .iter()
@@ -330,18 +458,20 @@ impl ApplicationHandler for App {
             height: size.height.max(1),
             present_mode: wgpu::PresentMode::AutoVsync,
             desired_maximum_frame_latency: 2,
-            alpha_mode: caps.alpha_modes[0],
+            alpha_mode: pick_alpha_mode(&caps.alpha_modes, self.st.translucent_sidebar),
             view_formats: vec![],
             color_space: Default::default(),
         };
         surface.configure(&device, &config);
-        let painter = Painter::new(&device, format);
+        let mut painter = Painter::new(&device, format);
+        painter.transparent = self.st.translucent_sidebar;
         let egui = egui_winit::State::new(
             self.ctx.clone(),
             egui::ViewportId::ROOT,
             &window,
             Some(window.scale_factor() as f32),
-            None,
+            // Start in the system appearance; ThemeChanged keeps it in sync afterwards.
+            window.theme(),
             Some(device.limits().max_texture_dimension_2d as usize),
         );
         window.request_redraw();
@@ -359,6 +489,9 @@ impl ApplicationHandler for App {
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         let Some(g) = self.gfx.as_mut() else { return };
         let resp = g.egui.on_window_event(&g.window, &event);
+        if !matches!(event, WindowEvent::RedrawRequested) {
+            log::trace!("event {event:?} -> egui repaint {}", resp.repaint);
+        }
         let scale = g.window.scale_factor();
         let mut redraw = resp.repaint;
         let now = self.now();
@@ -373,10 +506,38 @@ impl ApplicationHandler for App {
                 g.config.width = s.width.max(1);
                 g.config.height = s.height.max(1);
                 g.surface.configure(&g.device, &g.config);
+                #[cfg(target_os = "macos")]
+                {
+                    let (x, y) = theme::TRAFFIC_LIGHTS;
+                    crate::macos::inset_traffic_lights(&g.window, x, y);
+                }
+                redraw = true;
+            }
+            WindowEvent::ScaleFactorChanged { .. } => {
+                // Moved between Retina and non-Retina displays. egui-winit has already picked
+                // up the new pixels-per-point; resize the surface to the new physical size
+                // (winit follows with a Resized, but don't rely on it).
+                let g = self.gfx.as_mut().unwrap();
+                let s = g.window.inner_size();
+                g.config.width = s.width.max(1);
+                g.config.height = s.height.max(1);
+                g.surface.configure(&g.device, &g.config);
+                redraw = true;
+            }
+            WindowEvent::ThemeChanged(_) => {
+                // Light/dark switch: egui-winit swaps the style; refresh the accent too.
+                theme::set_accent(theme::system_accent());
+                ui::setup_style(&self.ctx);
                 redraw = true;
             }
             WindowEvent::Occluded(false) => redraw = true,
-            WindowEvent::RedrawRequested => self.redraw(),
+            WindowEvent::RedrawRequested => {
+                // egui-winit reports `repaint: true` for RedrawRequested itself; honouring it
+                // re-requested a redraw every frame (a 100% CPU busy loop). Whether another
+                // frame is needed is decided inside redraw() from egui's repaint delay.
+                self.redraw();
+                return;
+            }
             WindowEvent::ModifiersChanged(m) => {
                 let s = m.state();
                 self.ed.handle(InputEvent::Modifiers(Modifiers {
@@ -467,12 +628,24 @@ impl ApplicationHandler for App {
                     .input(|i| i.pointer.latest_pos())
                     .map(|p| v2(p.x as f64, p.y as f64));
                 if let Some(p) = p.filter(|p| self.over_canvas(*p)) {
+                    // `delta` is the change in magnification; exp() keeps pinch in and out
+                    // symmetric, like MKMapView / Preview.
                     self.ed.handle(InputEvent::Zoom {
-                        factor: 1.0 + delta,
+                        factor: delta.exp(),
                         pos: self.to_canvas(p),
                     });
                     redraw = true;
                 }
+            }
+            WindowEvent::DoubleTapGesture { .. } => {
+                // Trackpad smart zoom (two-finger double tap): toggle fit / 100%.
+                let a = if (self.ed.camera.zoom - 1.0).abs() < 1e-3 {
+                    crate::editor::shortcuts::Action::ZoomFit
+                } else {
+                    crate::editor::shortcuts::Action::Zoom100
+                };
+                self.ed.run(a);
+                redraw = true;
             }
             WindowEvent::Touch(t) => {
                 // Pens and touch screens: forward pressure for ink.
@@ -556,6 +729,52 @@ impl ApplicationHandler for App {
             g.window.request_redraw();
         }
     }
+
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: UserEvent) {
+        match event {
+            #[cfg(target_os = "macos")]
+            UserEvent::Menu(id) => {
+                if let Some(cmd) = self.menu.as_ref().and_then(|m| m.command(&id)) {
+                    self.menu_command(_event_loop, cmd);
+                }
+            }
+        }
+    }
+
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        match self.next_repaint {
+            Some(t) if Instant::now() >= t => {
+                self.next_repaint = None;
+                if let Some(g) = &self.gfx {
+                    g.window.request_redraw();
+                }
+                event_loop.set_control_flow(ControlFlow::Wait);
+            }
+            Some(t) => event_loop.set_control_flow(ControlFlow::WaitUntil(t)),
+            None => event_loop.set_control_flow(ControlFlow::Wait),
+        }
+    }
+}
+
+/// A non-opaque mode when the window shows vibrancy through transparent pixels.
+fn pick_alpha_mode(
+    modes: &[wgpu::CompositeAlphaMode],
+    translucent: bool,
+) -> wgpu::CompositeAlphaMode {
+    use wgpu::CompositeAlphaMode as A;
+    if translucent {
+        for m in [A::PreMultiplied, A::PostMultiplied, A::Inherit] {
+            if modes.contains(&m) {
+                return m;
+            }
+        }
+        log::warn!("no transparent surface alpha mode in {modes:?}");
+    }
+    if modes.contains(&A::Opaque) {
+        A::Opaque
+    } else {
+        modes[0]
+    }
 }
 
 fn physical_char(c: winit::keyboard::KeyCode) -> Option<char> {
@@ -573,8 +792,17 @@ fn physical_char(c: winit::keyboard::KeyCode) -> Option<char> {
 }
 
 pub fn run(ed: Editor) -> Result<(), String> {
-    let event_loop = EventLoop::new().map_err(|e| format!("cannot open a window: {e}"))?;
+    let event_loop = EventLoop::<UserEvent>::with_user_event()
+        .build()
+        .map_err(|e| format!("cannot open a window: {e}"))?;
     event_loop.set_control_flow(ControlFlow::Wait);
+    #[cfg(target_os = "macos")]
+    {
+        let proxy = event_loop.create_proxy();
+        muda::MenuEvent::set_event_handler(Some(move |e: muda::MenuEvent| {
+            let _ = proxy.send_event(UserEvent::Menu(e.id));
+        }));
+    }
     let mut app = App::new(ed);
     event_loop.run_app(&mut app).map_err(|e| e.to_string())
 }

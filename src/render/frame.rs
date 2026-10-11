@@ -9,6 +9,9 @@ use crate::ui::{self, UiState};
 pub struct Painter {
     canvas: CanvasRenderer,
     egui: egui_wgpu::Renderer,
+    /// Clear to transparent so a vibrancy view behind the window shows through wherever the
+    /// UI doesn't paint (the canvas always paints its own opaque background).
+    pub transparent: bool,
 }
 
 /// Result of laying out the UI for a frame.
@@ -45,6 +48,7 @@ impl Painter {
         Painter {
             canvas: CanvasRenderer::new(device, format),
             egui: egui_wgpu::Renderer::new(device, format, egui_wgpu::RendererOptions::default()),
+            transparent: false,
         }
     }
 
@@ -65,7 +69,11 @@ impl Painter {
         let offset = v2(layout.canvas.min.x as f64, layout.canvas.min.y as f64);
         let batches = scene::canvas(ed, offset, show_grid);
         let mut enc = device.create_command_encoder(&Default::default());
-        let bg = scene::CANVAS_BG.to_f32(1.0);
+        let bg = if self.transparent {
+            [0.0; 4]
+        } else {
+            scene::CANVAS_BG.to_f32(1.0)
+        };
         self.canvas.render(
             device,
             queue,
@@ -74,7 +82,12 @@ impl Painter {
             size,
             ppp,
             &batches,
-            [bg[0] as f64, bg[1] as f64, bg[2] as f64, 1.0],
+            [
+                bg[0] as f64,
+                bg[1] as f64,
+                bg[2] as f64,
+                if self.transparent { 0.0 } else { 1.0 },
+            ],
         );
 
         let mut out = layout.output;

@@ -3,6 +3,7 @@
 use crate::editor::shortcuts::{self, Action};
 use crate::editor::{Editor, Tool};
 use crate::model::{Color, NodeId, NodeKind};
+use crate::theme::{self, Icon};
 use egui::{Align2, Color32, RichText, Ui};
 use std::collections::HashSet;
 
@@ -14,17 +15,15 @@ pub struct UiState {
     pub show_grid_off: bool,
     pub export_scale: u8,
     pub export_transparent: bool,
+    /// The window has native chrome: a system menu bar (so no egui menu) and traffic lights
+    /// inset into the toolbar / sidebar.
+    pub native_chrome: bool,
+    /// The sidebar sits over an NSVisualEffectView, so paint it transparent.
+    pub translucent_sidebar: bool,
 }
 
-const ACCENT: Color32 = Color32::from_rgb(0x2f, 0x6f, 0xf3);
-
 pub fn setup_style(ctx: &egui::Context) {
-    ctx.set_visuals(egui::Visuals::light());
-    ctx.global_style_mut(|s| {
-        s.spacing.item_spacing = egui::vec2(6.0, 4.0);
-        s.visuals.selection.bg_fill = ACCENT;
-        s.visuals.panel_fill = Color32::from_rgb(0xfa, 0xfa, 0xfb);
-    });
+    theme::apply(ctx);
 }
 
 fn c32(c: Color) -> Color32 {
@@ -35,19 +34,67 @@ fn from32(c: Color32) -> Color {
     Color::rgba(r, g, b, a)
 }
 
+/// Section header, as in a macOS sidebar or inspector: 11pt semibold, secondary colour.
+fn section(ui: &mut Ui, title: &str) {
+    ui.label(
+        RichText::new(title)
+            .font(theme::semibold(theme::SECONDARY))
+            .color(theme::pal(ui).secondary),
+    );
+}
+
+fn title_text(text: impl Into<String>) -> RichText {
+    RichText::new(text).font(theme::semibold(theme::BODY))
+}
+
 /// Lay out the chrome and return the remaining canvas rectangle (logical px).
 pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
     if st.export_scale == 0 {
         st.export_scale = 2;
     }
-    egui::Panel::top("menu").show(ui, |ui| menu_bar(ui, ed, st));
+    let p = theme::pal(ui);
+    let sidebar_fill = if st.translucent_sidebar {
+        Color32::TRANSPARENT
+    } else {
+        p.sidebar
+    };
     egui::Panel::left("layers")
         .resizable(true)
         .default_size(240.0)
-        .show(ui, |ui| layers(ui, ed, st));
+        .size_range(180.0..=420.0)
+        .frame(
+            egui::Frame::NONE
+                .fill(sidebar_fill)
+                .inner_margin(egui::Margin::symmetric(10, 8)),
+        )
+        .show(ui, |ui| {
+            if st.native_chrome {
+                // Room for the traffic lights, which sit over the top of the sidebar.
+                ui.add_space(theme::TOOLBAR_H - 8.0);
+            }
+            layers(ui, ed, st)
+        });
+    egui::Panel::top("toolbar")
+        .exact_size(if st.native_chrome {
+            theme::TOOLBAR_H
+        } else {
+            34.0
+        })
+        .frame(
+            egui::Frame::NONE
+                .fill(p.window)
+                .inner_margin(egui::Margin::symmetric(12, 0)),
+        )
+        .show(ui, |ui| top_bar(ui, ed, st));
     egui::Panel::right("design")
         .resizable(true)
         .default_size(260.0)
+        .size_range(220.0..=420.0)
+        .frame(
+            egui::Frame::NONE
+                .fill(p.inspector)
+                .inner_margin(egui::Margin::symmetric(14, 10)),
+        )
         .show(ui, |ui| design(ui, ed, st));
     let canvas = ui.available_rect_before_wrap();
     toolbar(ui.ctx(), ed, canvas);
@@ -73,8 +120,79 @@ fn menu_item(ui: &mut Ui, ed: &mut Editor, label: &str, action: Action) {
     }
 }
 
+/// The unified toolbar: document title on the left, zoom and help on the right. Without native
+/// chrome (Linux) it also carries an egui menu bar.
+fn top_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
+    let p = theme::pal(ui);
+    ui.horizontal_centered(|ui| {
+        if !st.native_chrome {
+            menu_bar(ui, ed, st);
+            ui.add_space(8.0);
+        }
+        let file = ed
+            .file_path
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .map(|f| f.to_string_lossy().to_string())
+            .unwrap_or_else(|| "Not saved".into());
+        ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            ui.add_space(if st.native_chrome { 6.0 } else { 1.0 });
+            ui.label(title_text(&ed.doc.name));
+            let edited = if ed.is_dirty() { " — Edited" } else { "" };
+            ui.label(
+                RichText::new(format!("{file}{edited}"))
+                    .size(theme::SECONDARY)
+                    .color(p.secondary),
+            );
+        });
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            if theme::icon_button(ui, theme::Icon::Question, 26.0, st.show_help)
+                .on_hover_text("Keyboard shortcuts")
+                .clicked()
+            {
+                st.show_help = !st.show_help;
+            }
+            ui.add_space(8.0);
+            if theme::icon_button(ui, theme::Icon::Plus, 26.0, false)
+                .on_hover_text("Zoom in")
+                .clicked()
+            {
+                ed.run(Action::ZoomIn);
+            }
+            let z = ui.add(
+                egui::Button::new(
+                    RichText::new(format!("{:.0}%", ed.camera.zoom * 100.0))
+                        .font(theme::medium(theme::SECONDARY + 1.0)),
+                )
+                .frame(false)
+                .min_size(egui::vec2(44.0, 22.0)),
+            );
+            if z.on_hover_text("Zoom to fit").clicked() {
+                ed.run(Action::ZoomFit);
+            }
+            if theme::icon_button(ui, theme::Icon::Minus, 26.0, false)
+                .on_hover_text("Zoom out")
+                .clicked()
+            {
+                ed.run(Action::ZoomOut);
+            }
+        });
+    });
+    // 1px separator under the toolbar.
+    let r = ui.max_rect();
+    ui.painter().hline(
+        r.x_range(),
+        r.bottom() - 0.5,
+        egui::Stroke::new(1.0, p.separator),
+    );
+}
+
+/// egui menus for platforms without a native menu bar (inline, so the toolbar row keeps
+/// the title and zoom controls).
 fn menu_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
-    egui::MenuBar::new().ui(ui, |ui| {
+    {
         ui.menu_button("File", |ui| {
             menu_item(ui, ed, "New", Action::New);
             menu_item(ui, ed, "Open…", Action::Open);
@@ -83,13 +201,7 @@ fn menu_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
             ui.separator();
             menu_item(ui, ed, "Export PNG…", Action::ExportPng);
             menu_item(ui, ed, "Export SVG…", Action::ExportSvg);
-            ui.horizontal(|ui| {
-                ui.label("PNG scale");
-                for s in [1u8, 2, 3] {
-                    ui.selectable_value(&mut st.export_scale, s, format!("{s}x"));
-                }
-            });
-            ui.checkbox(&mut st.export_transparent, "Transparent PNG background");
+            export_options(ui, st);
         });
         ui.menu_button("Edit", |ui| {
             menu_item(ui, ed, "Undo", Action::Undo);
@@ -122,51 +234,53 @@ fn menu_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
             }
             ui.checkbox(&mut st.show_help, "Keyboard shortcuts");
         });
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.button("?").on_hover_text("Keyboard shortcuts").clicked() {
-                st.show_help = !st.show_help;
-            }
-            ui.label(format!("{:.0}%", ed.camera.zoom * 100.0));
-            let dirty = if ed.is_dirty() { " •" } else { "" };
-            let file = ed
-                .file_path
-                .as_ref()
-                .and_then(|p| p.file_name())
-                .map(|f| f.to_string_lossy().to_string())
-                .unwrap_or_else(|| "not saved".into());
-            ui.label(RichText::new(format!("{}{dirty}  —  {file}", ed.doc.name)).strong());
-        });
+    }
+}
+
+fn export_options(ui: &mut Ui, st: &mut UiState) {
+    ui.horizontal(|ui| {
+        ui.label("PNG scale");
+        for s in [1u8, 2, 3] {
+            ui.selectable_value(&mut st.export_scale, s, format!("{s}x"));
+        }
     });
+    ui.checkbox(&mut st.export_transparent, "Transparent PNG background");
 }
 
 fn layers(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
     ui.horizontal(|ui| {
-        ui.heading("Layers");
+        section(ui, "Layers");
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
             let some = !ed.selection.is_empty();
-            if ui
-                .add_enabled(some, egui::Button::new("Down").small())
-                .on_hover_text("Send backward")
-                .clicked()
-            {
-                ed.run(Action::Backward);
-            }
-            if ui
-                .add_enabled(some, egui::Button::new("Up").small())
-                .on_hover_text("Bring forward")
-                .clicked()
-            {
-                ed.run(Action::Forward);
-            }
+            ui.add_enabled_ui(some, |ui| {
+                if theme::icon_button(ui, Icon::ChevronDown, 20.0, false)
+                    .on_hover_text("Send backward")
+                    .clicked()
+                {
+                    ed.run(Action::Backward);
+                }
+                if theme::icon_button(ui, Icon::ChevronUp, 20.0, false)
+                    .on_hover_text("Bring forward")
+                    .clicked()
+                {
+                    ed.run(Action::Forward);
+                }
+            });
         });
     });
-    ui.separator();
+    ui.add_space(2.0);
     egui::ScrollArea::vertical()
         .auto_shrink(false)
         .show(ui, |ui| {
+            ui.spacing_mut().item_spacing.y = 1.0;
             let roots = ed.doc.root.clone();
             if roots.is_empty() {
-                ui.weak("Nothing here yet. Pick a tool below\nand draw on the canvas.");
+                ui.label(
+                    RichText::new("Nothing here yet. Pick a tool below\nand draw on the canvas.")
+                        .size(theme::SECONDARY)
+                        .color(theme::pal(ui).secondary),
+                );
             }
             for id in roots.iter().rev() {
                 layer_row(ui, ed, st, *id, 0);
@@ -174,111 +288,185 @@ fn layers(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
         });
 }
 
+fn kind_icon(k: &NodeKind) -> Icon {
+    match k {
+        NodeKind::Frame { .. } => Icon::Frame,
+        NodeKind::Rect => Icon::Rect,
+        NodeKind::Ellipse => Icon::Ellipse,
+        NodeKind::Line { .. } => Icon::Line,
+        NodeKind::Text { .. } => Icon::Text,
+        NodeKind::Stroke { .. } => Icon::Ink,
+    }
+}
+
+/// One sidebar row, drawn like an NSOutlineView row: 24pt tall, 6pt radius selection in the
+/// accent colour, subtle hover, disclosure chevron, symbol, name, and eye/lock on hover.
 fn layer_row(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, id: NodeId, depth: usize) {
     let Some(n) = ed.doc.get(id).cloned() else {
         return;
     };
+    let p = theme::pal(ui);
     let selected = ed.selection.contains(&id);
-    ui.horizontal(|ui| {
-        ui.add_space(depth as f32 * 14.0);
-        if n.children.is_empty() {
-            ui.add_space(16.0);
+    let width = ui.available_width();
+    let (row, resp) = ui.allocate_exact_size(egui::vec2(width, 24.0), egui::Sense::click());
+    let hovered = ui.rect_contains_pointer(row);
+    if selected {
+        ui.painter().rect_filled(row, 6.0, theme::accent());
+    } else if hovered {
+        ui.painter().rect_filled(row, 6.0, p.hover);
+    }
+    let fg = if selected {
+        Color32::WHITE
+    } else if n.visible {
+        p.text
+    } else {
+        p.secondary
+    };
+    let fg2 = if selected {
+        Color32::from_white_alpha(200)
+    } else {
+        p.secondary
+    };
+    let mut x = row.left() + 4.0 + depth as f32 * 14.0;
+    let cy = row.center().y;
+    let sq = |x: f32, s: f32| {
+        egui::Rect::from_center_size(egui::pos2(x + s / 2.0, cy), egui::vec2(s, s))
+    };
+
+    // Disclosure chevron.
+    if !n.children.is_empty() {
+        let open = !st.collapsed.contains(&id);
+        let r = sq(x, 14.0);
+        let cr = ui.interact(
+            r.expand(2.0),
+            ui.id().with(("disclose", id)),
+            egui::Sense::click(),
+        );
+        theme::paint_icon(
+            ui.painter(),
+            r.shrink(2.0),
+            if open {
+                Icon::ChevronDown
+            } else {
+                Icon::ChevronRight
+            },
+            fg2,
+        );
+        if cr.clicked() {
+            if open {
+                st.collapsed.insert(id);
+            } else {
+                st.collapsed.remove(&id);
+            }
+        }
+    }
+    x += 16.0;
+    theme::paint_icon(
+        ui.painter(),
+        sq(x, 14.0),
+        kind_icon(&n.kind),
+        if selected {
+            Color32::WHITE
         } else {
-            let open = !st.collapsed.contains(&id);
-            if ui
-                .add(
-                    egui::Button::new(if open { "-" } else { "+" })
-                        .frame(false)
-                        .small(),
-                )
-                .clicked()
-            {
-                if open {
-                    st.collapsed.insert(id);
-                } else {
-                    st.collapsed.remove(&id);
-                }
-            }
+            theme::accent()
+        },
+    );
+    x += 20.0;
+
+    // Trailing eye / lock buttons: always shown when hidden or locked, otherwise on hover.
+    let mut right = row.right() - 4.0;
+    let mut trailing = |ui: &mut Ui, icon: Icon, tip: &str, show: bool| -> bool {
+        let r = egui::Rect::from_center_size(egui::pos2(right - 9.0, cy), egui::vec2(18.0, 18.0));
+        right -= 20.0;
+        if !show {
+            return false;
         }
-        let icon = match n.kind {
-            NodeKind::Frame { .. } => "#",
-            NodeKind::Rect => "R",
-            NodeKind::Ellipse => "O",
-            NodeKind::Line { .. } => "/",
-            NodeKind::Text { .. } => "T",
-            NodeKind::Stroke { .. } => "~",
-        };
-        ui.label(RichText::new(icon).weak());
-        if let Some((rid, name)) = &mut st.renaming
-            && *rid == id
-        {
-            let r = ui.add(egui::TextEdit::singleline(name).desired_width(120.0));
-            r.request_focus();
-            if r.lost_focus() {
-                let new = name.trim().to_string();
-                st.renaming = None;
-                if !new.is_empty() && new != n.name {
-                    ed.edit("Rename", |tx| tx.node_mut(id).unwrap().name = new);
-                }
-            }
-            return;
-        }
-        let mut text = RichText::new(&n.name);
-        if !n.visible {
-            text = text.weak();
-        }
-        if n.is_frame() {
-            text = text.strong();
-        }
-        let r = ui.add(egui::Button::selectable(selected, text).frame_when_inactive(false));
-        if r.double_clicked() {
-            st.renaming = Some((id, n.name.clone()));
-        } else if r.clicked() {
-            ed.end_text_edit();
-            if ui.input(|i| i.modifiers.shift) {
+        let b = ui.interact(r, ui.id().with((tip, id)), egui::Sense::click());
+        if b.hovered() {
+            ui.painter().rect_filled(
+                r,
+                5.0,
                 if selected {
-                    ed.selection.retain(|s| *s != id);
+                    Color32::from_white_alpha(40)
                 } else {
-                    ed.selection.push(id);
-                }
-            } else {
-                ed.selection = vec![id];
-            }
-        }
-        if r.hovered() {
-            ed.hover = Some(id);
-        }
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let lock = if n.locked { "🔒" } else { "🔓" };
-            let lr = ui.add(
-                egui::Button::new(RichText::new(lock).size(11.0))
-                    .frame(false)
-                    .small(),
+                    p.hover
+                },
             );
-            if lr
-                .on_hover_text(if n.locked { "Unlock" } else { "Lock" })
-                .clicked()
-            {
-                ed.edit(if n.locked { "Unlock" } else { "Lock" }, |tx| {
-                    tx.node_mut(id).unwrap().locked = !n.locked
-                });
-            }
-            let eye = if n.visible {
-                RichText::new("👁").size(11.0)
-            } else {
-                RichText::new("👁").size(11.0).weak().strikethrough()
-            };
-            let er = ui.add(egui::Button::new(eye).frame(false).small());
-            if er
-                .on_hover_text(if n.visible { "Hide" } else { "Show" })
-                .clicked()
-            {
-                ed.edit(if n.visible { "Hide" } else { "Show" }, |tx| {
-                    tx.node_mut(id).unwrap().visible = !n.visible
-                });
-            }
+        }
+        theme::paint_icon(ui.painter(), r.shrink(3.0), icon, fg2);
+        b.on_hover_text(tip).clicked()
+    };
+    let eye = if n.visible { Icon::Eye } else { Icon::EyeSlash };
+    if trailing(
+        ui,
+        eye,
+        if n.visible { "Hide" } else { "Show" },
+        hovered || !n.visible,
+    ) {
+        ed.edit(if n.visible { "Hide" } else { "Show" }, |tx| {
+            tx.node_mut(id).unwrap().visible = !n.visible
         });
-    });
+    }
+    let lock = if n.locked { Icon::Lock } else { Icon::LockOpen };
+    if trailing(
+        ui,
+        lock,
+        if n.locked { "Unlock" } else { "Lock" },
+        hovered || n.locked,
+    ) {
+        ed.edit(if n.locked { "Unlock" } else { "Lock" }, |tx| {
+            tx.node_mut(id).unwrap().locked = !n.locked
+        });
+    }
+
+    // Name, or an inline rename field.
+    let name_rect =
+        egui::Rect::from_min_max(egui::pos2(x, row.top()), egui::pos2(right, row.bottom()));
+    if let Some((rid, name)) = &mut st.renaming
+        && *rid == id
+    {
+        let r = ui.put(
+            name_rect.shrink2(egui::vec2(0.0, 2.0)),
+            egui::TextEdit::singleline(name),
+        );
+        r.request_focus();
+        if r.lost_focus() {
+            let new = name.trim().to_string();
+            st.renaming = None;
+            if !new.is_empty() && new != n.name {
+                ed.edit("Rename", |tx| tx.node_mut(id).unwrap().name = new);
+            }
+        }
+    } else {
+        let font = if n.is_frame() {
+            theme::medium(theme::BODY)
+        } else {
+            egui::FontId::proportional(theme::BODY)
+        };
+        let galley = ui.painter().layout(n.name.clone(), font, fg, f32::INFINITY);
+        let clip = ui
+            .painter()
+            .with_clip_rect(name_rect.intersect(ui.clip_rect()));
+        clip.galley(egui::pos2(x, cy - galley.size().y / 2.0), galley, fg);
+    }
+
+    if resp.double_clicked() {
+        st.renaming = Some((id, n.name.clone()));
+    } else if resp.clicked() {
+        ed.end_text_edit();
+        if ui.input(|i| i.modifiers.shift || i.modifiers.command) {
+            if selected {
+                ed.selection.retain(|s| *s != id);
+            } else {
+                ed.selection.push(id);
+            }
+        } else {
+            ed.selection = vec![id];
+        }
+    }
+    if hovered {
+        ed.hover = Some(id);
+    }
     if !st.collapsed.contains(&id) {
         for c in n.children.iter().rev() {
             layer_row(ui, ed, st, *c, depth + 1);
@@ -357,11 +545,11 @@ fn color_row(ui: &mut Ui, ed: &mut Editor, label: &str, c: Option<Color>) -> Opt
 }
 
 fn design(ui: &mut Ui, ed: &mut Editor, _st: &mut UiState) {
-    ui.heading("Design");
-    ui.separator();
+    section(ui, "Design");
+    ui.add_space(2.0);
     let ids = ed.top_selection();
     if ids.is_empty() {
-        ui.label(RichText::new("Pencil").strong());
+        ui.label(title_text("Pencil"));
         ui.horizontal(|ui| {
             ui.label(RichText::new("Width").weak());
             ui.add(egui::Slider::new(&mut ed.ink_width, 0.5..=24.0));
@@ -378,7 +566,7 @@ fn design(ui: &mut Ui, ed: &mut Editor, _st: &mut UiState) {
             }
         });
         ui.separator();
-        ui.label(RichText::new("Document").strong());
+        ui.label(title_text("Document"));
         let mut name = ed.doc.name.clone();
         if ui.text_edit_singleline(&mut name).changed() {
             ed.doc.name = name;
@@ -391,7 +579,11 @@ fn design(ui: &mut Ui, ed: &mut Editor, _st: &mut UiState) {
     if ids.len() > 1 {
         ui.label(format!("{} layers selected", ids.len()));
     } else {
-        ui.label(RichText::new(format!("{} · {}", first.kind.type_name(), first.name)).strong());
+        ui.label(title_text(format!(
+            "{} · {}",
+            first.kind.type_name(),
+            first.name
+        )));
     }
     ui.separator();
 
@@ -534,28 +726,47 @@ fn design(ui: &mut Ui, ed: &mut Editor, _st: &mut UiState) {
     seal_on_release(ed, &r);
 }
 
+fn tool_icon(t: Tool) -> Icon {
+    match t {
+        Tool::Select => Icon::Pointer,
+        Tool::Hand => Icon::Hand,
+        Tool::Frame => Icon::Frame,
+        Tool::Rect => Icon::Rect,
+        Tool::Ellipse => Icon::Ellipse,
+        Tool::Line => Icon::Line,
+        Tool::Text => Icon::Text,
+        Tool::Pencil => Icon::Pencil,
+        Tool::Eraser => Icon::Eraser,
+    }
+}
+
+/// Floating tool palette at the bottom of the canvas, styled as a macOS popover.
 fn toolbar(ctx: &egui::Context, ed: &mut Editor, canvas: egui::Rect) {
     egui::Area::new("toolbar".into())
         .pivot(Align2::CENTER_BOTTOM)
         .fixed_pos(egui::pos2(canvas.center().x, canvas.bottom() - 16.0))
         .show(ctx, |ui| {
+            let p = theme::pal(ui);
             egui::Frame::popup(ui.style())
+                .fill(p.popover)
                 .corner_radius(10.0)
-                .inner_margin(6.0)
+                .inner_margin(5.0)
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 2.0;
                         for t in Tool::ALL {
-                            let active = ed.tool == t;
-                            let text = RichText::new(t.label()).color(if active {
-                                Color32::WHITE
-                            } else {
-                                Color32::from_gray(40)
-                            });
-                            let b = egui::Button::new(text)
-                                .fill(if active { ACCENT } else { Color32::TRANSPARENT })
-                                .corner_radius(6.0);
-                            if ui
-                                .add(b)
+                            if matches!(t, Tool::Frame | Tool::Text) {
+                                let (r, _) = ui.allocate_exact_size(
+                                    egui::vec2(9.0, 28.0),
+                                    egui::Sense::hover(),
+                                );
+                                ui.painter().vline(
+                                    r.center().x,
+                                    r.y_range().shrink(6.0),
+                                    egui::Stroke::new(1.0, p.separator),
+                                );
+                            }
+                            if theme::icon_button(ui, tool_icon(t), 30.0, ed.tool == t)
                                 .on_hover_text(format!("{} ({})", t.label(), t.shortcut()))
                                 .clicked()
                             {
@@ -592,7 +803,11 @@ fn help(ctx: &egui::Context, st: &mut UiState) {
                 .show(ui, |ui| {
                     egui::Grid::new("keys").striped(true).show(ui, |ui| {
                         for (k, d) in shortcuts::help_table() {
-                            ui.label(RichText::new(k).monospace());
+                            ui.label(
+                                RichText::new(k)
+                                    .font(theme::medium(12.0))
+                                    .color(theme::pal(ui).secondary),
+                            );
                             ui.label(d);
                             ui.end_row();
                         }

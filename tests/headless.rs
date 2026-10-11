@@ -654,8 +654,15 @@ fn app_full_ui_screenshot() {
     img.save(shot("app_demo.png")).unwrap();
     // Chrome present: left panel background and canvas background both visible.
     assert!(
-        close(img.get_pixel(20, 600).0, Color::rgb(0xfa, 0xfa, 0xfb), 3),
-        "layers panel"
+        close(
+            img.get_pixel(20, 600).0,
+            {
+                let c = paper_rs::theme::palette(false).sidebar;
+                Color::rgb(c.r(), c.g(), c.b())
+            },
+            3
+        ),
+        "layers panel (light sidebar)"
     );
     let bg = img.get_pixel(1300, 1600).0;
     assert!(
