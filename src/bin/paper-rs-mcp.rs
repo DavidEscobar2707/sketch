@@ -8,7 +8,7 @@
 use paper_rs::mcp::{self, server};
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ListToolsResult,
-    PaginatedRequestParams, ServerConfig,
+    PaginatedRequestParams, ResultType, ServerConfig,
 };
 use rmcp::service::{RequestContext, RunningService};
 use rmcp::transport::StreamableHttpClientTransport;
@@ -89,7 +89,14 @@ impl ServerHandler for Bridge {
         _context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
         let r = match self.forward(request).await {
-            Ok(r) => r,
+            Ok(mut r) => {
+                // The app may have answered over an older protocol revision (no resultType);
+                // 2026-07-28 clients require it. rmcp drops it again for older-revision peers.
+                if r.result_type.is_none() {
+                    r.result_type = Some(ResultType::COMPLETE);
+                }
+                r
+            }
             Err(e) => CallToolResult::error(vec![ContentBlock::text(format!(
                 "{e}\nThe paper-rs app is not running or its MCP server is off. Ask the user to \
                  start paper-rs (it serves MCP while open), then try again."

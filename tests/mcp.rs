@@ -572,6 +572,47 @@ async fn stdio_bridge_relays_to_the_app() {
     running.stop();
 }
 
+/// Protocol 2026-07-28 clients (e.g. Claude Code) skip `initialize`, send the revision in each
+/// request's `_meta`, and reject `tools/call` results without `resultType`. The app's HTTP leg
+/// answers the bridge in an older revision, so the bridge must add it back.
+#[test]
+fn stdio_bridge_results_carry_result_type_for_2026_clients() {
+    use std::io::{BufRead, Write};
+    let (running, _worker) = spawn_app();
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_paper-rs-mcp"))
+        .env("PAPER_RS_MCP_PORT", running.port.to_string())
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let meta = r#""_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientInfo":{"name":"raw","version":"1"},"io.modelcontextprotocol/clientCapabilities":{}}"#;
+    let mut stdin = child.stdin.take().unwrap();
+    writeln!(
+        stdin,
+        r#"{{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{{"name":"create_artboard","arguments":{{"name":"Raw","styles":{{"width":"100px","height":"100px"}}}},{meta}}}}}"#
+    )
+    .unwrap();
+    let mut line = String::new();
+    std::io::BufReader::new(child.stdout.take().unwrap())
+        .read_line(&mut line)
+        .unwrap();
+    drop(stdin);
+    let _ = child.kill();
+    let _ = child.wait();
+    running.stop();
+    let v: Value = serde_json::from_str(&line).unwrap();
+    assert_eq!(v["id"], 7, "{line}");
+    assert_eq!(v["result"]["resultType"], "complete", "{line}");
+    assert!(
+        v["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("\"Raw\""),
+        "{line}"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn stdio_bridge_lists_tools_without_the_app() {
     // A port nothing listens on.
@@ -625,13 +666,23 @@ fn agent_design_screenshot() {
              <div style="display:flex; justify-content:center; align-items:center; height:48px; border-radius:10px; background:#4f46e5; color:#ffffff; font-size:16px; font-weight:600">Continue</div></div>"#,
         r#"<div style="display:flex; justify-content:space-between"><span style="font-size:14px; color:#4f46e5">Forgot password?</span><span style="font-size:14px; color:#64748b">Create account</span></div>"#,
     ] {
-        call(&mut h, "write_html", json!({"targetNodeId": id, "mode": "insert-children", "html": html}));
+        call(
+            &mut h,
+            "write_html",
+            json!({"targetNodeId": id, "mode": "insert-children", "html": html}),
+        );
     }
     h.ed.doc.validate().unwrap();
     let outs = exec::call(&mut h, "get_screenshot", &json!({"nodeId": id, "scale": 2})).unwrap();
-    let Out::Image { data, .. } = &outs[0] else { panic!() };
+    let Out::Image { data, .. } = &outs[0] else {
+        panic!()
+    };
     let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("docs/screenshots");
     std::fs::write(dir.join("milestone7_mcp.png"), data).unwrap();
     let ab_node = h.ed.doc.get(num(&id)).unwrap();
-    assert!(ab_node.rect.h > 400.0, "artboard hugs its content: {:?}", ab_node.rect);
+    assert!(
+        ab_node.rect.h > 400.0,
+        "artboard hugs its content: {:?}",
+        ab_node.rect
+    );
 }
