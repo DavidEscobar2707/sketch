@@ -20,6 +20,13 @@ library. Everything autosaves, and exports to PNG, SVG and PDF; Excalidraw files
 > shaders, icons, fonts or assets are used or committed. The UI and canvas text use
 > [Inter](https://rsms.me/inter/) 4.1 (SIL OFL 1.1), bundled in `assets/fonts/`.
 
+## Reverse-engineered origin
+
+paper-rs is an independent, clean-room-style reimplementation. It was reverse engineered from
+[Paper](https://paper.design) by studying the behavior of the Paper desktop app with
+[REA](https://github.com/morluto/rea) and Claude Code. It is not affiliated with or endorsed by
+Paper. No original Paper code or assets are included in this repository.
+
 ## Projects
 
 paper-rs opens on a **home screen** of your projects (recents grid with thumbnails, New, Import,
