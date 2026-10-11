@@ -329,8 +329,30 @@ fn layers(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
         });
 }
 
+fn node_icon(n: &crate::model::Node) -> Icon {
+    if n.component {
+        return Icon::Component;
+    }
+    if n.instance.is_some() && n.parent.is_none_or(|_| n.is_frame()) && n.is_frame() {
+        return Icon::Instance;
+    }
+    if n.style
+        .fills
+        .iter()
+        .any(|p| matches!(p, crate::model::Paint::Image { .. }))
+        && matches!(n.kind, NodeKind::Rect)
+    {
+        return Icon::Image;
+    }
+    kind_icon(&n.kind)
+}
+
 fn kind_icon(k: &NodeKind) -> Icon {
     match k {
+        NodeKind::Group => Icon::Group,
+        NodeKind::Path { .. } => Icon::Pen,
+        NodeKind::Polygon { .. } => Icon::Polygon,
+        NodeKind::Star { .. } => Icon::Star,
         NodeKind::Frame { .. } => Icon::Frame,
         NodeKind::Rect => Icon::Rect,
         NodeKind::Ellipse => Icon::Ellipse,
@@ -405,7 +427,7 @@ fn layer_row(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, id: NodeId, depth: 
     theme::paint_icon(
         ui.painter(),
         sq(x, 14.0),
-        kind_icon(&n.kind),
+        node_icon(&n),
         if selected {
             Color32::WHITE
         } else {
@@ -722,9 +744,9 @@ fn design(ui: &mut Ui, ed: &mut Editor, _st: &mut UiState) {
         "Fill"
     };
     if !matches!(first.kind, NodeKind::Line { .. })
-        && let Some(c) = color_row(ui, ed, label, first.style.fill)
+        && let Some(c) = color_row(ui, ed, label, first.style.fill())
     {
-        apply(ed, "fill", &ids, |n| n.style.fill = c);
+        apply(ed, "fill", &ids, |n| n.style.set_fill(c));
     }
     if !matches!(first.kind, NodeKind::Text { .. } | NodeKind::Stroke { .. }) {
         if let Some(c) = color_row(ui, ed, "Stroke", first.style.stroke) {

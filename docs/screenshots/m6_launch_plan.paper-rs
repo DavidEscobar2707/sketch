@@ -29,7 +29,12 @@
         "h": 440.0
       },
       "style": {
-        "fill": "#ffffff",
+        "fills": [
+          {
+            "type": "solid",
+            "color": "#ffffff"
+          }
+        ],
         "stroke": null,
         "stroke_width": 1.0,
         "corner_radius": 0.0,
@@ -68,7 +73,12 @@
         "h": 33.87890625
       },
       "style": {
-        "fill": "#1c1c1e",
+        "fills": [
+          {
+            "type": "solid",
+            "color": "#1c1c1e"
+          }
+        ],
         "stroke": null,
         "stroke_width": 1.0,
         "corner_radius": 0.0,
@@ -93,7 +103,12 @@
         "h": 18.1494140625
       },
       "style": {
-        "fill": "#6b6b75",
+        "fills": [
+          {
+            "type": "solid",
+            "color": "#6b6b75"
+          }
+        ],
         "stroke": null,
         "stroke_width": 1.0,
         "corner_radius": 0.0,
@@ -114,7 +129,12 @@
         "h": 120.0
       },
       "style": {
-        "fill": "#ffe082",
+        "fills": [
+          {
+            "type": "solid",
+            "color": "#ffe082"
+          }
+        ],
         "stroke": null,
         "stroke_width": 1.0,
         "corner_radius": 10.0,
@@ -139,7 +159,12 @@
         "h": 38.71875
       },
       "style": {
-        "fill": "#1c1c1e",
+        "fills": [
+          {
+            "type": "solid",
+            "color": "#1c1c1e"
+          }
+        ],
         "stroke": null,
         "stroke_width": 1.0,
         "corner_radius": 0.0,
@@ -160,7 +185,12 @@
         "h": 120.0
       },
       "style": {
-        "fill": "#ffc2d1",
+        "fills": [
+          {
+            "type": "solid",
+            "color": "#ffc2d1"
+          }
+        ],
         "stroke": null,
         "stroke_width": 1.0,
         "corner_radius": 10.0,
@@ -185,7 +215,12 @@
         "h": 38.71875
       },
       "style": {
-        "fill": "#1c1c1e",
+        "fills": [
+          {
+            "type": "solid",
+            "color": "#1c1c1e"
+          }
+        ],
         "stroke": null,
         "stroke_width": 1.0,
         "corner_radius": 0.0,
@@ -206,7 +241,12 @@
         "h": 120.0
       },
       "style": {
-        "fill": "#b8f0d2",
+        "fills": [
+          {
+            "type": "solid",
+            "color": "#b8f0d2"
+          }
+        ],
         "stroke": null,
         "stroke_width": 1.0,
         "corner_radius": 10.0,
@@ -231,7 +271,12 @@
         "h": 38.71875
       },
       "style": {
-        "fill": "#1c1c1e",
+        "fills": [
+          {
+            "type": "solid",
+            "color": "#1c1c1e"
+          }
+        ],
         "stroke": null,
         "stroke_width": 1.0,
         "corner_radius": 0.0,
@@ -252,7 +297,12 @@
         "h": 12.0
       },
       "style": {
-        "fill": "#e7e7ec",
+        "fills": [
+          {
+            "type": "solid",
+            "color": "#e7e7ec"
+          }
+        ],
         "stroke": null,
         "stroke_width": 1.0,
         "corner_radius": 6.0,
@@ -273,7 +323,12 @@
         "h": 12.0
       },
       "style": {
-        "fill": "#2f6ff3",
+        "fills": [
+          {
+            "type": "solid",
+            "color": "#2f6ff3"
+          }
+        ],
         "stroke": null,
         "stroke_width": 1.0,
         "corner_radius": 6.0,
@@ -294,7 +349,12 @@
         "h": 24.0
       },
       "style": {
-        "fill": "#ffffff",
+        "fills": [
+          {
+            "type": "solid",
+            "color": "#ffffff"
+          }
+        ],
         "stroke": "#2f6ff3",
         "stroke_width": 3.0,
         "corner_radius": 0.0,
@@ -323,7 +383,6 @@
         "h": 0.0
       },
       "style": {
-        "fill": null,
         "stroke": "#d4d4da",
         "stroke_width": 1.0,
         "corner_radius": 0.0,
@@ -348,7 +407,12 @@
         "h": 16.939453125
       },
       "style": {
-        "fill": "#6b6b75",
+        "fills": [
+          {
+            "type": "solid",
+            "color": "#6b6b75"
+          }
+        ],
         "stroke": null,
         "stroke_width": 1.0,
         "corner_radius": 0.0,
@@ -370,7 +434,12 @@
         "h": 440.0
       },
       "style": {
-        "fill": "#fbfaf7",
+        "fills": [
+          {
+            "type": "solid",
+            "color": "#fbfaf7"
+          }
+        ],
         "stroke": null,
         "stroke_width": 1.0,
         "corner_radius": 0.0,
@@ -402,7 +471,12 @@
         "h": 26.619140625
       },
       "style": {
-        "fill": "#1c1c1e",
+        "fills": [
+          {
+            "type": "solid",
+            "color": "#1c1c1e"
+          }
+        ],
         "stroke": null,
         "stroke_width": 1.0,
         "corner_radius": 0.0,
@@ -2237,7 +2311,12 @@
         "h": 133.1700658251499
       },
       "style": {
-        "fill": "#1c1c1e",
+        "fills": [
+          {
+            "type": "solid",
+            "color": "#1c1c1e"
+          }
+        ],
         "stroke": null,
         "stroke_width": 1.0,
         "corner_radius": 0.0,
@@ -3052,7 +3131,12 @@
         "h": 41.39596884909611
       },
       "style": {
-        "fill": "#2f6ff3",
+        "fills": [
+          {
+            "type": "solid",
+            "color": "#2f6ff3"
+          }
+        ],
         "stroke": null,
         "stroke_width": 1.0,
         "corner_radius": 0.0,
@@ -4607,7 +4691,12 @@
         "h": 23.403115159042557
       },
       "style": {
-        "fill": "#e04f5f",
+        "fills": [
+          {
+            "type": "solid",
+            "color": "#e04f5f"
+          }
+        ],
         "stroke": null,
         "stroke_width": 1.0,
         "corner_radius": 0.0,
@@ -5107,7 +5196,12 @@
         "h": 63.677662608310925
       },
       "style": {
-        "fill": "#1c1c1e",
+        "fills": [
+          {
+            "type": "solid",
+            "color": "#1c1c1e"
+          }
+        ],
         "stroke": null,
         "stroke_width": 1.0,
         "corner_radius": 0.0,
@@ -5372,7 +5466,12 @@
         "h": 37.685302066674524
       },
       "style": {
-        "fill": "#1c1c1e",
+        "fills": [
+          {
+            "type": "solid",
+            "color": "#1c1c1e"
+          }
+        ],
         "stroke": null,
         "stroke_width": 1.0,
         "corner_radius": 0.0,
@@ -5397,7 +5496,12 @@
         "h": 21.779296875
       },
       "style": {
-        "fill": "#555560",
+        "fills": [
+          {
+            "type": "solid",
+            "color": "#555560"
+          }
+        ],
         "stroke": null,
         "stroke_width": 1.0,
         "corner_radius": 0.0,
@@ -5417,7 +5521,12 @@
         "h": 46.0
       },
       "style": {
-        "fill": "#ffc2d1",
+        "fills": [
+          {
+            "type": "solid",
+            "color": "#ffc2d1"
+          }
+        ],
         "stroke": null,
         "stroke_width": 1.0,
         "corner_radius": 0.0,

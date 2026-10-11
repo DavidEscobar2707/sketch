@@ -13,13 +13,37 @@ use lyon::tessellation::{
 #[derive(Debug, Clone, Copy, Pod, Zeroable, PartialEq)]
 pub struct Vertex {
     pub pos: [f32; 2],
+    /// Straight-alpha color; for gradient and image paints only alpha (opacity) is used.
     pub color: [f32; 4],
+    /// Paint coordinates: gradient space or image texture coordinates.
+    pub uv: [f32; 2],
+    /// Paint kind in the low byte (see `PAINT_*`), gradient atlas row above it.
+    pub kind: u32,
+    pub _pad: u32,
+}
+
+pub const PAINT_SOLID: u32 = 0;
+pub const PAINT_LINEAR: u32 = 1;
+pub const PAINT_RADIAL: u32 = 2;
+pub const PAINT_IMAGE: u32 = 3;
+pub const PAINT_IMAGE_TILE: u32 = 4;
+
+impl Vertex {
+    pub fn solid(pos: [f32; 2], color: [f32; 4]) -> Vertex {
+        Vertex {
+            pos,
+            color,
+            uv: [0.0; 2],
+            kind: PAINT_SOLID,
+            _pad: 0,
+        }
+    }
 }
 
 /// Screen-space tessellation tolerance in pixels.
 pub const TOLERANCE: f32 = 0.15;
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Debug)]
 pub struct Mesh {
     pub vertices: Vec<Vertex>,
     pub indices: Vec<u32>,
@@ -35,6 +59,14 @@ impl Mesh {
 pub struct Batch {
     pub clip: Option<Rect>,
     pub mesh: Mesh,
+}
+
+impl Mesh {
+    pub fn append(&mut self, o: &Mesh) {
+        let base = self.vertices.len() as u32;
+        self.vertices.extend_from_slice(&o.vertices);
+        self.indices.extend(o.indices.iter().map(|i| i + base));
+    }
 }
 
 pub struct MeshBuilder {
@@ -88,9 +120,8 @@ impl MeshBuilder {
         let _ = self.fill.tessellate_path(
             path,
             &FillOptions::tolerance(TOLERANCE).with_fill_rule(rule),
-            &mut BuffersBuilder::new(&mut vb, |v: FillVertex| Vertex {
-                pos: v.position().to_array(),
-                color,
+            &mut BuffersBuilder::new(&mut vb, |v: FillVertex| {
+                Vertex::solid(v.position().to_array(), color)
             }),
         );
         self.append(vb);
@@ -107,9 +138,8 @@ impl MeshBuilder {
                 .with_line_width(width)
                 .with_line_cap(cap)
                 .with_line_join(LineJoin::Round),
-            &mut BuffersBuilder::new(&mut vb, |v: StrokeVertex| Vertex {
-                pos: v.position().to_array(),
-                color,
+            &mut BuffersBuilder::new(&mut vb, |v: StrokeVertex| {
+                Vertex::solid(v.position().to_array(), color)
             }),
         );
         self.append(vb);
@@ -131,7 +161,8 @@ impl MeshBuilder {
     ) {
         let m = self.buffers();
         let base = m.vertices.len() as u32;
-        m.vertices.extend(verts.map(|pos| Vertex { pos, color }));
+        m.vertices
+            .extend(verts.map(|pos| Vertex::solid(pos, color)));
         m.indices.extend(indices.iter().map(|i| i + base));
     }
 
@@ -143,7 +174,7 @@ impl MeshBuilder {
         let m = self.buffers();
         let base = m.vertices.len() as u32;
         for pos in [[x0, y0], [x1, y0], [x1, y1], [x0, y1]] {
-            m.vertices.push(Vertex { pos, color });
+            m.vertices.push(Vertex::solid(pos, color));
         }
         m.indices
             .extend([base, base + 1, base + 2, base, base + 2, base + 3]);

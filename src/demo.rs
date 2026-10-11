@@ -23,13 +23,13 @@ pub fn text_node(s: &str, size: f64, at: V2, color: Color) -> Node {
         .chars()
         .take(24)
         .collect();
-    n.style.fill = Some(color);
+    n.style.set_fill(Some(color));
     n
 }
 
 pub fn shape(kind: NodeKind, r: Rect, fill: Option<Color>, radius: f64) -> Node {
     let mut n = Node::new(NodeId(0), kind, r);
-    n.style.fill = fill;
+    n.style.set_fill(fill);
     n.style.corner_radius = radius;
     n
 }

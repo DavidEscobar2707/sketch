@@ -89,6 +89,8 @@ pub struct TextEdit {
     pub id: NodeId,
     /// Caret as a char index.
     pub caret: usize,
+    /// Other end of the selection (None = no selection).
+    pub anchor: Option<usize>,
 }
 
 #[derive(Debug)]
@@ -571,7 +573,7 @@ impl Editor {
                         },
                         Rect::default(),
                     );
-                    n.style.fill = Some(color);
+                    n.style.set_fill(Some(color));
                     tx.insert(n, parent, None)
                 };
                 self.update_stroke_node(id, builder.points().to_vec());
@@ -616,7 +618,11 @@ impl Editor {
                     tx.insert(n, parent, None)
                 };
                 self.selection = vec![id];
-                self.text_edit = Some(TextEdit { id, caret: 0 });
+                self.text_edit = Some(TextEdit {
+                    id,
+                    caret: 0,
+                    anchor: None,
+                });
                 self.tool = Tool::Select;
             }
             Tool::Frame | Tool::Rect | Tool::Ellipse | Tool::Line => {
@@ -1273,7 +1279,11 @@ impl Editor {
         self.end_text_edit();
         self.begin("Edit text");
         self.selection = vec![id];
-        self.text_edit = Some(TextEdit { id, caret });
+        self.text_edit = Some(TextEdit {
+            id,
+            caret,
+            anchor: None,
+        });
     }
 
     /// Finish text editing; empty text nodes are removed.
@@ -1299,7 +1309,11 @@ impl Editor {
         {
             f(text, &mut caret);
         }
-        self.text_edit = Some(TextEdit { id: te.id, caret });
+        self.text_edit = Some(TextEdit {
+            id: te.id,
+            caret,
+            anchor: te.anchor,
+        });
         self.fit_text(te.id);
     }
 
@@ -1684,7 +1698,7 @@ impl Editor {
                 b.translate(V2::ZERO - o),
             );
             f.name = format!("Frame {}", n_frames + 1);
-            f.style.fill = None;
+            f.style.set_fill(None);
             tx.insert(f, parent, index);
             for id in &ids {
                 tx.reparent(*id, Some(fid), None);

@@ -4,7 +4,6 @@ use super::svg::export_bounds;
 use crate::geom::{Camera, V2, v2};
 use crate::model::{Color, Document, NodeId};
 use crate::render::gpu::Headless;
-use crate::render::mesh::MeshBuilder;
 use crate::render::scene::{self, View};
 
 /// Largest exported edge, in pixels.
@@ -37,8 +36,7 @@ pub fn render(
         viewport: v2(size[0] as f64, size[1] as f64),
         offset: V2::ZERO,
     };
-    let mut mb = MeshBuilder::default();
-    scene::document(&mut mb, &v, Some(&roots));
+    let frame = scene::export_frame(doc, Some(&roots), v.camera, v.viewport, None);
     let clear = match background {
         Some(c) => {
             let f = c.to_f32(1.0);
@@ -46,7 +44,7 @@ pub fn render(
         }
         None => [0.0; 4],
     };
-    let mut img = gpu.render_batches(&mb.finish(), size, 1.0, clear);
+    let mut img = gpu.render_frame(&frame, size, 1.0, clear);
     if background.is_none() {
         unpremultiply_edges(&mut img);
     }

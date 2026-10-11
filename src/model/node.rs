@@ -1,10 +1,15 @@
 //! Scene nodes.
 
+use super::paint::{
+    BlendMode, Cap, InstanceLink, Join, LayoutChild, Paint, StrokeAlign, TextStyle,
+};
 use crate::geom::{Rect, V2};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Default, Serialize, Deserialize,
+)]
 #[serde(transparent)]
 pub struct NodeId(pub u64);
 
@@ -78,22 +83,77 @@ impl<'de> Deserialize<'de> for Color {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Style {
-    pub fill: Option<Color>,
+    /// Fill layers, bottom to top.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub fills: Vec<Paint>,
     pub stroke: Option<Color>,
     pub stroke_width: f64,
+    #[serde(skip_serializing_if = "is_default")]
+    pub stroke_align: StrokeAlign,
+    /// Dash pattern (lengths in px); empty = solid.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub dash: Vec<f64>,
+    #[serde(skip_serializing_if = "is_default")]
+    pub cap: Cap,
+    #[serde(skip_serializing_if = "is_default")]
+    pub join: Join,
     pub corner_radius: f64,
+    /// Per-corner radii (top-left, top-right, bottom-right, bottom-left); overrides
+    /// `corner_radius` when set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub radii: Option<[f64; 4]>,
     pub opacity: f64,
+    #[serde(skip_serializing_if = "is_default")]
+    pub blend: BlendMode,
+    /// Hand-drawn (rough.js style) rendering.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rough: Option<super::rough::Rough>,
+}
+
+fn is_default<T: Default + PartialEq>(t: &T) -> bool {
+    *t == T::default()
 }
 
 impl Default for Style {
     fn default() -> Self {
         Style {
-            fill: None,
+            fills: Vec::new(),
             stroke: None,
             stroke_width: 1.0,
+            stroke_align: StrokeAlign::Center,
+            dash: Vec::new(),
+            cap: Cap::Butt,
+            join: Join::Miter,
             corner_radius: 0.0,
+            radii: None,
             opacity: 1.0,
+            blend: BlendMode::Normal,
+            rough: None,
         }
+    }
+}
+
+impl Style {
+    pub fn with_fill(c: Color) -> Style {
+        Style {
+            fills: vec![Paint::solid(c)],
+            ..Style::default()
+        }
+    }
+    /// The top solid fill color, if the top fill is solid.
+    pub fn fill(&self) -> Option<Color> {
+        match self.fills.last() {
+            Some(Paint::Solid { color }) => Some(*color),
+            _ => None,
+        }
+    }
+    /// Replace all fills with one solid color (or none).
+    pub fn set_fill(&mut self, c: Option<Color>) {
+        self.fills = c.map(Paint::solid).into_iter().collect();
+    }
+    /// Corner radii (tl, tr, br, bl).
+    pub fn corner_radii(&self) -> [f64; 4] {
+        self.radii.unwrap_or([self.corner_radius; 4])
     }
 }
 
@@ -148,6 +208,23 @@ pub enum NodeKind {
         #[serde(default)]
         align: TextAlign,
     },
+    /// Groups children; its rect is always the union of the children's rects.
+    Group,
+    /// Vector path (pen tool, boolean results, imported SVG). Points are node-local.
+    Path {
+        subpaths: Vec<SubPath>,
+        #[serde(default)]
+        fill_rule: FillRule,
+    },
+    /// Regular polygon inscribed in the box, first vertex at the top.
+    Polygon {
+        sides: u32,
+    },
+    /// Star inscribed in the box; `inner` is the inner radius ratio.
+    Star {
+        points: u32,
+        inner: f64,
+    },
     /// Freehand ink. Points are node-local; the outline is computed on render.
     Stroke {
         points: Vec<StrokePoint>,
@@ -175,6 +252,10 @@ impl NodeKind {
             NodeKind::Line { .. } => "Line",
             NodeKind::Text { .. } => "Text",
             NodeKind::Stroke { .. } => "Drawing",
+            NodeKind::Group => "Group",
+            NodeKind::Path { .. } => "Vector",
+            NodeKind::Polygon { .. } => "Polygon",
+            NodeKind::Star { .. } => "Star",
         }
     }
 }
@@ -198,36 +279,75 @@ pub struct Node {
     /// Paint order, bottom to top.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<NodeId>,
+    /// Rich text attributes (text nodes).
+    #[serde(default, skip_serializing_if = "TextStyle::is_default")]
+    pub text_style: TextStyle,
+    /// Auto layout (frames only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout: Option<super::paint::AutoLayout>,
+    /// How this node sizes and positions itself inside its parent frame.
+    #[serde(default, skip_serializing_if = "LayoutChild::is_default")]
+    pub layout_child: LayoutChild,
+    /// This frame is a main component.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub component: bool,
+    /// Instance link (instance roots and every node inside an instance).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance: Option<InstanceLink>,
+}
+
+/// One anchor of a vector path, with optional bezier handles (node-local, absolute).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct PathPoint {
+    pub p: V2,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub h_in: Option<V2>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub h_out: Option<V2>,
+}
+
+impl PathPoint {
+    pub fn corner(p: V2) -> PathPoint {
+        PathPoint {
+            p,
+            h_in: None,
+            h_out: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SubPath {
+    pub points: Vec<PathPoint>,
+    #[serde(default)]
+    pub closed: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FillRule {
+    #[default]
+    NonZero,
+    EvenOdd,
 }
 
 impl Node {
     pub fn new(id: NodeId, kind: NodeKind, rect: Rect) -> Node {
+        let gray = Color::rgb(0xd9, 0xd9, 0xd9);
         let style = match &kind {
-            NodeKind::Frame { .. } => Style {
-                fill: Some(Color::WHITE),
-                ..Style::default()
-            },
-            NodeKind::Rect => Style {
-                fill: Some(Color::rgb(0xd9, 0xd9, 0xd9)),
-                ..Style::default()
-            },
-            NodeKind::Ellipse => Style {
-                fill: Some(Color::rgb(0xd9, 0xd9, 0xd9)),
-                ..Style::default()
-            },
+            NodeKind::Frame { .. } => Style::with_fill(Color::WHITE),
+            NodeKind::Rect
+            | NodeKind::Ellipse
+            | NodeKind::Polygon { .. }
+            | NodeKind::Star { .. }
+            | NodeKind::Path { .. } => Style::with_fill(gray),
             NodeKind::Line { .. } => Style {
                 stroke: Some(Color::INK),
                 stroke_width: 2.0,
                 ..Style::default()
             },
-            NodeKind::Text { .. } => Style {
-                fill: Some(Color::INK),
-                ..Style::default()
-            },
-            NodeKind::Stroke { .. } => Style {
-                fill: Some(Color::INK),
-                ..Style::default()
-            },
+            NodeKind::Text { .. } | NodeKind::Stroke { .. } => Style::with_fill(Color::INK),
+            NodeKind::Group => Style::default(),
         };
         Node {
             id,
@@ -239,7 +359,21 @@ impl Node {
             locked: false,
             parent: None,
             children: Vec::new(),
+            text_style: TextStyle::default(),
+            layout: None,
+            layout_child: LayoutChild::default(),
+            component: false,
+            instance: None,
         }
+    }
+
+    pub fn is_group(&self) -> bool {
+        matches!(self.kind, NodeKind::Group)
+    }
+
+    /// Frames and groups hold children.
+    pub fn is_container(&self) -> bool {
+        matches!(self.kind, NodeKind::Frame { .. } | NodeKind::Group)
     }
 
     pub fn is_frame(&self) -> bool {
@@ -271,6 +405,23 @@ impl Node {
                 a.y *= sy;
                 b.x *= sx;
                 b.y *= sy;
+            }
+            NodeKind::Path { subpaths, .. } => {
+                let sc = |v: &mut V2| {
+                    v.x *= sx;
+                    v.y *= sy;
+                };
+                for sp in subpaths.iter_mut() {
+                    for pt in sp.points.iter_mut() {
+                        sc(&mut pt.p);
+                        if let Some(h) = &mut pt.h_in {
+                            sc(h);
+                        }
+                        if let Some(h) = &mut pt.h_out {
+                            sc(h);
+                        }
+                    }
+                }
             }
             NodeKind::Text { auto_width, .. } if (new.w - old.w).abs() > 1e-9 => {
                 *auto_width = false;
@@ -325,7 +476,7 @@ mod tests {
         );
         let s = serde_json::to_string(&n).unwrap();
         assert!(s.contains("\"type\":\"frame\""), "{s}");
-        assert!(s.contains("\"fill\":\"#ffffff\""), "{s}");
+        assert!(s.contains("\"color\":\"#ffffff\""), "{s}");
         let back: Node = serde_json::from_str(&s).unwrap();
         assert_eq!(back, n);
     }

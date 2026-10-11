@@ -240,7 +240,7 @@ fn m2_pages_keep_separate_canvases_history_and_cameras() {
 fn m2_copy_paste_between_pages_and_projects() {
     let mut ed = editor(1000.0, 700.0);
     let mut n = Node::new(NodeId(0), NodeKind::Rect, Rect::new(10.0, 20.0, 30.0, 40.0));
-    n.style.fill = Some(Color::rgb(200, 10, 10));
+    n.style.set_fill(Some(Color::rgb(200, 10, 10)));
     let id = ed.add_node(n, None);
     ed.selection = vec![id];
     key(
@@ -256,7 +256,7 @@ fn m2_copy_paste_between_pages_and_projects() {
     );
     assert_eq!(ed.doc.nodes.len(), 1);
     let pasted = ed.doc.get(ed.selection[0]).unwrap();
-    assert_eq!(pasted.style.fill, Some(Color::rgb(200, 10, 10)));
+    assert_eq!(pasted.style.fill(), Some(Color::rgb(200, 10, 10)));
     assert_eq!(
         pasted.rect.min(),
         v2(10.0, 20.0),
@@ -303,9 +303,15 @@ fn m2_pages_panel_screenshot() {
         save_state: "Saved".into(),
         ..Default::default()
     };
-    let img = frame::capture(g, &mut ed, &mut st, [1440.0, 900.0], 2.0, |ed| ed.zoom_to_fit());
+    let img = frame::capture(g, &mut ed, &mut st, [1440.0, 900.0], 2.0, |ed| {
+        ed.zoom_to_fit()
+    });
     img.save(shot("milestone2_pages.png")).unwrap();
     // The canvas shows the Flows page: its blue buttons are on screen.
     let blue = Color::rgb(0x2f, 0x6f, 0xf3);
-    assert!(count(&img, Rect::new(260.0, 60.0, 900.0, 800.0), |p| close(p, blue, 12)) > 500);
+    assert!(
+        count(&img, Rect::new(260.0, 60.0, 900.0, 800.0), |p| close(
+            p, blue, 12
+        )) > 500
+    );
 }

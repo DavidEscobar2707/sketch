@@ -3,7 +3,6 @@
 use crate::geom::Camera;
 use crate::model::{Document, Node, NodeId};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::path::Path;
 
 pub const FORMAT: &str = "paper-rs";
@@ -20,12 +19,6 @@ struct FileV1 {
     next_id: u64,
     root: Vec<NodeId>,
     nodes: Vec<Node>,
-}
-
-#[derive(Serialize, Deserialize)]
-struct Header {
-    format: String,
-    version: u32,
 }
 
 #[derive(Debug)]
@@ -72,24 +65,15 @@ pub fn to_string(doc: &Document, camera: Option<&Camera>) -> String {
 }
 
 pub fn from_str(s: &str) -> Result<(Document, Option<Camera>), FileError> {
-    let header: Header = serde_json::from_str(s).map_err(|_| FileError::NotPaperRs)?;
-    if header.format != FORMAT {
-        return Err(FileError::NotPaperRs);
+    use crate::project::format::{FormatError, page_from_json};
+    match page_from_json(s) {
+        Ok(p) => Ok((p.doc, p.camera)),
+        Err(FormatError::WrongFormat(_)) => Err(FileError::NotPaperRs),
+        Err(FormatError::TooNew { version, .. }) => Err(FileError::UnsupportedVersion(version)),
+        Err(FormatError::Json(e)) => Err(FileError::Json(e)),
+        Err(FormatError::Invalid(e)) => Err(FileError::Invalid(e)),
+        Err(FormatError::Io(e)) => Err(FileError::Io(e)),
     }
-    if header.version > VERSION {
-        return Err(FileError::UnsupportedVersion(header.version));
-    }
-    let f: FileV1 = serde_json::from_str(s).map_err(FileError::Json)?;
-    let max_id = f.nodes.iter().map(|n| n.id.0).max().unwrap_or(0);
-    let nodes: HashMap<NodeId, Node> = f.nodes.into_iter().map(|n| (n.id, n)).collect();
-    let doc = Document {
-        name: f.name,
-        nodes,
-        root: f.root,
-        next_id: f.next_id.max(max_id + 1),
-    };
-    doc.validate().map_err(FileError::Invalid)?;
-    Ok((doc, f.camera))
 }
 
 /// Write atomically (temp file + rename) so a crash never leaves a truncated document.

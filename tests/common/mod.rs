@@ -41,12 +41,12 @@ pub fn shot(name: &str) -> PathBuf {
 
 /// Render the interactive canvas (no chrome) at 2x.
 pub fn render_canvas(g: &Headless, ed: &Editor) -> image::RgbaImage {
-    let batches = scene::canvas(ed, V2::ZERO, true);
+    let frame = scene::canvas(ed, &mut scene::SceneCache::default(), V2::ZERO, true);
     let size = [
         (ed.viewport.x * SCALE) as u32,
         (ed.viewport.y * SCALE) as u32,
     ];
-    g.render_batches(&batches, size, SCALE as f32, [1.0; 4])
+    g.render_frame(&frame, size, SCALE as f32, [1.0; 4])
 }
 
 /// Pixel at a logical (canvas) position.

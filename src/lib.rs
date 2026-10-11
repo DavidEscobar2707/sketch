@@ -1,6 +1,7 @@
 //! paper-rs: a native infinite canvas for planning, working and sketching.
 
 pub mod app;
+pub mod assets;
 pub mod demo;
 pub mod editor;
 pub mod geom;
@@ -16,3 +17,4 @@ pub mod session;
 pub mod text;
 pub mod theme;
 pub mod ui;
+pub mod vector;

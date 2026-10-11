@@ -7,7 +7,8 @@ use crate::geom::v2;
 use crate::ui::{self, UiState};
 
 pub struct Painter {
-    canvas: CanvasRenderer,
+    pub canvas: CanvasRenderer,
+    pub cache: scene::SceneCache,
     egui: egui_wgpu::Renderer,
     /// Clear to transparent so a vibrancy view behind the window shows through wherever the
     /// UI doesn't paint (the canvas always paints its own opaque background).
@@ -47,6 +48,7 @@ impl Painter {
     pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Painter {
         Painter {
             canvas: CanvasRenderer::new(device, format),
+            cache: scene::SceneCache::default(),
             egui: egui_wgpu::Renderer::new(device, format, egui_wgpu::RendererOptions::default()),
             transparent: false,
         }
@@ -67,7 +69,7 @@ impl Painter {
     ) {
         let ppp = layout.output.pixels_per_point;
         let offset = v2(layout.canvas.min.x as f64, layout.canvas.min.y as f64);
-        let batches = scene::canvas(ed, offset, show_grid);
+        let frame = scene::canvas(ed, &mut self.cache, offset, show_grid);
         let mut enc = device.create_command_encoder(&Default::default());
         let bg = if self.transparent {
             [0.0; 4]
@@ -81,7 +83,7 @@ impl Painter {
             target,
             size,
             ppp,
-            &batches,
+            &frame,
             [
                 bg[0] as f64,
                 bg[1] as f64,

@@ -87,11 +87,8 @@ fn page_row(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, i: usize, top: f32) 
         && to == i
     {
         let y = if to > from { row.bottom() } else { row.top() };
-        ui.painter().hline(
-            row.x_range(),
-            y,
-            egui::Stroke::new(2.0, theme::accent()),
-        );
+        ui.painter()
+            .hline(row.x_range(), y, egui::Stroke::new(2.0, theme::accent()));
     }
     theme::paint_icon(
         ui.painter(),

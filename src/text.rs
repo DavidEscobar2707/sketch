@@ -5,17 +5,44 @@
 //! not anything taken from Paper.
 
 use crate::geom::{V2, v2};
-use crate::model::TextAlign;
+use crate::model::{CharStyle, Color, TextAlign, TextStyle};
+use crate::vector::VPath;
 use lyon::path::Path;
 use lyon::tessellation::{BuffersBuilder, FillOptions, FillTessellator, FillVertex, VertexBuffers};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
 pub static FONT_BYTES: &[u8] = crate::theme::INTER_REGULAR;
+static BOLD: &[u8] = include_bytes!("../assets/fonts/Inter-Bold.ttf");
+static ITALIC: &[u8] = include_bytes!("../assets/fonts/Inter-Italic.ttf");
+static BOLD_ITALIC: &[u8] = include_bytes!("../assets/fonts/Inter-BoldItalic.ttf");
+
+/// Face index: bit 0 = bold, bit 1 = italic.
+pub type FaceId = u8;
+
+pub fn face_id(bold: bool, italic: bool) -> FaceId {
+    bold as u8 | (italic as u8) << 1
+}
+
+pub fn face_bytes(id: FaceId) -> &'static [u8] {
+    match id & 3 {
+        0 => FONT_BYTES,
+        1 => BOLD,
+        2 => ITALIC,
+        _ => BOLD_ITALIC,
+    }
+}
+
+pub fn face_of(id: FaceId) -> &'static ttf_parser::Face<'static> {
+    static FACES: OnceLock<[ttf_parser::Face<'static>; 4]> = OnceLock::new();
+    &FACES.get_or_init(|| {
+        [0, 1, 2, 3]
+            .map(|i| ttf_parser::Face::parse(face_bytes(i), 0).expect("bundled font parses"))
+    })[(id & 3) as usize]
+}
 
 pub fn face() -> &'static ttf_parser::Face<'static> {
-    static FACE: OnceLock<ttf_parser::Face<'static>> = OnceLock::new();
-    FACE.get_or_init(|| ttf_parser::Face::parse(FONT_BYTES, 0).expect("bundled font parses"))
+    face_of(0)
 }
 
 fn units_per_em() -> f64 {
@@ -35,16 +62,24 @@ pub fn ascent(font_size: f64) -> f64 {
 #[derive(Debug, Clone, Copy)]
 pub struct PlacedGlyph {
     pub gid: u16,
+    pub face: FaceId,
+    pub size: f64,
+    pub color: Color,
     /// Pen position of the glyph origin (baseline), relative to the text box.
     pub x: f64,
     pub baseline: f64,
+    pub advance: f64,
     /// Char index into the source string this glyph comes from.
     pub char_index: usize,
+    pub underline: bool,
+    pub strike: bool,
 }
 
 #[derive(Debug, Clone)]
 pub struct Line {
     pub top: f64,
+    pub height: f64,
+    pub baseline: f64,
     pub width: f64,
     /// Char index range `[start, end)`; `end` excludes the line break.
     pub start: usize,
@@ -62,21 +97,60 @@ pub struct TextLayout {
     pub font_size: f64,
 }
 
-fn advance(c: char, font_size: f64) -> (u16, f64) {
-    let f = face();
+fn advance_in(face: FaceId, c: char, font_size: f64) -> (u16, f64) {
+    let f = face_of(face);
     let gid = f
         .glyph_index(c)
         .or_else(|| f.glyph_index('?'))
         .map(|g| g.0)
         .unwrap_or(0);
     let adv = f.glyph_hor_advance(ttf_parser::GlyphId(gid)).unwrap_or(0) as f64;
-    (gid, adv / units_per_em() * font_size)
+    (gid, adv / f.units_per_em() as f64 * font_size)
 }
 
-/// Lay out text with optional wrapping at `max_width` and horizontal alignment within `box_width`.
+#[cfg(test)]
+fn advance(c: char, font_size: f64) -> (u16, f64) {
+    advance_in(0, c, font_size)
+}
+
+/// Lay out plain text with optional wrapping at `max_width`.
 pub fn layout(text: &str, font_size: f64, max_width: Option<f64>, align: TextAlign) -> TextLayout {
-    let lh = line_height(font_size);
+    layout_rich(
+        text,
+        font_size,
+        Color::INK,
+        &TextStyle::default(),
+        max_width,
+        align,
+    )
+}
+
+/// Lay out text whose characters may each have their own weight, slant, size and color.
+pub fn layout_rich(
+    text: &str,
+    font_size: f64,
+    color: Color,
+    ts: &TextStyle,
+    max_width: Option<f64>,
+    align: TextAlign,
+) -> TextLayout {
     let chars: Vec<char> = text.chars().collect();
+    let styles: Vec<CharStyle> = (0..chars.len())
+        .map(|i| ts.char_style(i, font_size, color))
+        .collect();
+    let ls = ts.letter_spacing;
+    let adv: Vec<(u16, f64)> = chars
+        .iter()
+        .zip(&styles)
+        .map(|(c, s)| {
+            let (g, a) = advance_in(face_id(s.bold, s.italic), *c, s.size);
+            (g, a + ls)
+        })
+        .collect();
+    let lh_of = |size: f64| match ts.line_height {
+        Some(m) => size * m,
+        None => line_height(size),
+    };
     // Break into lines: hard breaks on '\n', soft breaks at spaces when wrapping.
     let mut ranges: Vec<(usize, usize)> = Vec::new();
     let mut start = 0;
@@ -91,7 +165,7 @@ pub fn layout(text: &str, font_size: f64, max_width: Option<f64>, align: TextAli
             let mut last_space: Option<usize> = None;
             let mut i = line_start;
             while i < hard_end {
-                let (_, a) = advance(chars[i], font_size);
+                let a = adv[i].1;
                 if chars[i] == ' ' {
                     last_space = Some(i);
                 }
@@ -119,28 +193,52 @@ pub fn layout(text: &str, font_size: f64, max_width: Option<f64>, align: TextAli
     let mut lines = Vec::new();
     let mut glyphs = Vec::new();
     let mut max_line_w: f64 = 0.0;
-    for (li, (s, e)) in ranges.iter().copied().enumerate() {
+    let mut top = 0.0;
+    for (s, e) in ranges.iter().copied() {
+        // Line metrics from the largest size on the line (or the char before an empty line).
+        let sizes = styles[s..e].iter().map(|c| c.size);
+        let max_size = sizes
+            .clone()
+            .fold(None, |m: Option<f64>, z| Some(m.map_or(z, |m| m.max(z))))
+            .unwrap_or_else(|| {
+                styles
+                    .get(s.saturating_sub(1))
+                    .map_or(font_size, |c| c.size)
+            });
+        let lh = lh_of(max_size);
+        let natural = line_height(max_size);
+        let baseline = top + ascent(max_size) + (lh - natural) * 0.5;
         let mut x = 0.0;
         let mut carets = vec![0.0];
-        for (i, c) in chars.iter().enumerate().take(e).skip(s) {
-            let (gid, a) = advance(*c, font_size);
+        for i in s..e {
+            let st = styles[i];
+            let (gid, a) = adv[i];
             glyphs.push(PlacedGlyph {
                 gid,
+                face: face_id(st.bold, st.italic),
+                size: st.size,
+                color: st.color,
                 x,
-                baseline: li as f64 * lh + ascent(font_size),
+                baseline,
+                advance: a,
                 char_index: i,
+                underline: st.underline,
+                strike: st.strike,
             });
             x += a;
             carets.push(x);
         }
         max_line_w = max_line_w.max(x);
         lines.push(Line {
-            top: li as f64 * lh,
+            top,
+            height: lh,
+            baseline,
             width: x,
             start: s,
             end: e,
             carets,
         });
+        top += lh;
     }
     let box_w = max_width.unwrap_or(max_line_w);
     if align != TextAlign::Left {
@@ -160,7 +258,7 @@ pub fn layout(text: &str, font_size: f64, max_width: Option<f64>, align: TextAli
     }
     TextLayout {
         glyphs,
-        height: lines.len() as f64 * lh,
+        height: top,
         lines,
         width: max_line_w,
         font_size,
@@ -170,21 +268,52 @@ pub fn layout(text: &str, font_size: f64, max_width: Option<f64>, align: TextAli
 impl TextLayout {
     /// Caret (x, top, height) for a char index into the source string.
     pub fn caret(&self, index: usize) -> (f64, f64, f64) {
-        let lh = line_height(self.font_size);
+        let i = self.line_of(index);
+        let l = &self.lines[i];
+        let k = index.clamp(l.start, l.end) - l.start;
+        (l.carets[k], l.top, l.height)
+    }
+
+    /// Index of the line holding char boundary `index`.
+    pub fn line_of(&self, index: usize) -> usize {
         for (i, l) in self.lines.iter().enumerate() {
             let next_start = self.lines.get(i + 1).map(|n| n.start);
             if index >= l.start && index <= l.end && next_start.is_none_or(|ns| index < ns) {
-                return (l.carets[index - l.start], l.top, lh);
+                return i;
             }
         }
-        let l = self.lines.last().unwrap();
-        (*l.carets.last().unwrap(), l.top, lh)
+        self.lines.len() - 1
+    }
+
+    /// Highlight rectangles (x, top, w, h) for the char range `[a, b)`.
+    pub fn selection_rects(&self, a: usize, b: usize) -> Vec<(f64, f64, f64, f64)> {
+        let (a, b) = (a.min(b), a.max(b));
+        let mut out = Vec::new();
+        for l in &self.lines {
+            let s = a.max(l.start);
+            let e = b.min(l.end);
+            if s > e || (s == e && !(a < l.start && b > l.end)) {
+                continue;
+            }
+            let x0 = l.carets[s - l.start];
+            let x1 = l.carets[e - l.start];
+            let extra = if b > l.end && l.end < usize::MAX {
+                4.0
+            } else {
+                0.0
+            };
+            out.push((x0, l.top, (x1 - x0 + extra).max(1.0), l.height));
+        }
+        out
     }
 
     /// Char index nearest to a local point.
     pub fn hit(&self, p: V2) -> usize {
-        let lh = line_height(self.font_size);
-        let li = ((p.y / lh).floor().max(0.0) as usize).min(self.lines.len() - 1);
+        let li = self
+            .lines
+            .iter()
+            .position(|l| p.y < l.top + l.height)
+            .unwrap_or(self.lines.len() - 1);
         let l = &self.lines[li];
         let mut best = 0;
         for (i, x) in l.carets.iter().enumerate() {
@@ -202,23 +331,24 @@ pub struct GlyphMesh {
     pub indices: Vec<u32>,
 }
 
-pub fn glyph_mesh(gid: u16) -> Arc<GlyphMesh> {
-    static CACHE: OnceLock<Mutex<HashMap<u16, Arc<GlyphMesh>>>> = OnceLock::new();
+pub fn glyph_mesh(face: FaceId, gid: u16) -> Arc<GlyphMesh> {
+    type Cache = Mutex<HashMap<(FaceId, u16), Arc<GlyphMesh>>>;
+    static CACHE: OnceLock<Cache> = OnceLock::new();
     let cache = CACHE.get_or_init(Default::default);
-    if let Some(m) = cache.lock().unwrap().get(&gid) {
+    if let Some(m) = cache.lock().unwrap().get(&(face, gid)) {
         return m.clone();
     }
-    let mesh = Arc::new(tessellate_glyph(gid));
-    cache.lock().unwrap().insert(gid, mesh.clone());
+    let mesh = Arc::new(tessellate_glyph(face, gid));
+    cache.lock().unwrap().insert((face, gid), mesh.clone());
     mesh
 }
 
-fn tessellate_glyph(gid: u16) -> GlyphMesh {
+fn tessellate_glyph(face: FaceId, gid: u16) -> GlyphMesh {
     let mut b = LyonOutline {
         b: Path::builder(),
         open: false,
     };
-    face().outline_glyph(ttf_parser::GlyphId(gid), &mut b);
+    face_of(face).outline_glyph(ttf_parser::GlyphId(gid), &mut b);
     if b.open {
         b.b.end(true);
     }
@@ -269,47 +399,78 @@ impl ttf_parser::OutlineBuilder for LyonOutline {
     }
 }
 
-/// SVG path data for a glyph placed at `origin` (baseline) with `font_size`, y down.
-pub fn glyph_svg_path(gid: u16, origin: V2, font_size: f64) -> String {
-    struct Svg {
-        d: String,
+/// Outline of a glyph placed at `origin` (baseline) with `font_size`, y down.
+pub fn glyph_path(face: FaceId, gid: u16, origin: V2, font_size: f64) -> VPath {
+    struct B {
+        p: VPath,
         o: V2,
         s: f64,
     }
-    impl Svg {
-        fn p(&self, x: f32, y: f32) -> String {
-            let q = self.o + v2(x as f64 * self.s, -(y as f64) * self.s);
-            format!("{:.2} {:.2}", q.x, q.y)
+    impl B {
+        fn t(&self, x: f32, y: f32) -> V2 {
+            self.o + v2(x as f64 * self.s, -(y as f64) * self.s)
         }
     }
-    impl ttf_parser::OutlineBuilder for Svg {
+    impl ttf_parser::OutlineBuilder for B {
         fn move_to(&mut self, x: f32, y: f32) {
-            let p = self.p(x, y);
-            self.d += &format!("M{p}");
+            let q = self.t(x, y);
+            self.p.move_to(q);
         }
         fn line_to(&mut self, x: f32, y: f32) {
-            let p = self.p(x, y);
-            self.d += &format!("L{p}");
+            let q = self.t(x, y);
+            self.p.line_to(q);
         }
         fn quad_to(&mut self, x1: f32, y1: f32, x: f32, y: f32) {
-            let (a, b) = (self.p(x1, y1), self.p(x, y));
-            self.d += &format!("Q{a} {b}");
+            let (a, b) = (self.t(x1, y1), self.t(x, y));
+            self.p.quad_to(a, b);
         }
         fn curve_to(&mut self, x1: f32, y1: f32, x2: f32, y2: f32, x: f32, y: f32) {
-            let (a, b, c) = (self.p(x1, y1), self.p(x2, y2), self.p(x, y));
-            self.d += &format!("C{a} {b} {c}");
+            let (a, b, c) = (self.t(x1, y1), self.t(x2, y2), self.t(x, y));
+            self.p.cubic_to(a, b, c);
         }
         fn close(&mut self) {
-            self.d += "Z";
+            self.p.close();
         }
     }
-    let mut s = Svg {
-        d: String::new(),
+    let f = face_of(face);
+    let mut b = B {
+        p: VPath::new(),
         o: origin,
-        s: font_size / units_per_em(),
+        s: font_size / f.units_per_em() as f64,
     };
-    face().outline_glyph(ttf_parser::GlyphId(gid), &mut s);
-    s.d
+    f.outline_glyph(ttf_parser::GlyphId(gid), &mut b);
+    b.p
+}
+
+/// SVG path data for a glyph (regular face).
+pub fn glyph_svg_path(gid: u16, origin: V2, font_size: f64) -> String {
+    glyph_path(0, gid, origin, font_size).to_svg()
+}
+
+/// Layout of a text node's content in its box (None for other kinds).
+pub fn layout_node(n: &crate::model::Node) -> Option<TextLayout> {
+    let crate::model::NodeKind::Text {
+        text,
+        font_size,
+        auto_width,
+        align,
+    } = &n.kind
+    else {
+        return None;
+    };
+    let color = n
+        .style
+        .fills
+        .last()
+        .map_or(Color::INK, |p| p.preview_color());
+    Some(layout_rich(
+        text,
+        *font_size,
+        color,
+        &n.text_style,
+        (!auto_width).then_some(n.rect.w),
+        *align,
+    ))
 }
 
 #[cfg(test)]
@@ -359,7 +520,7 @@ mod tests {
     #[test]
     fn glyphs_tessellate() {
         let (gid, _) = advance('A', 10.0);
-        let m = glyph_mesh(gid);
+        let m = glyph_mesh(0, gid);
         assert!(!m.indices.is_empty());
         assert!(glyph_svg_path(gid, V2::ZERO, 10.0).starts_with('M'));
     }

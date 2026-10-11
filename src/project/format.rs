@@ -17,8 +17,8 @@ pub const PAGE_FORMAT: &str = "paper-rs-page";
 pub const LEGACY_FORMAT: &str = "paper-rs";
 
 pub const PROJECT_VERSION: u32 = 1;
-/// v1: legacy single file. v2: page file inside a project.
-pub const PAGE_VERSION: u32 = 2;
+/// v1: legacy single file. v2: page file inside a project. v3: fill layers (`fills`).
+pub const PAGE_VERSION: u32 = 3;
 
 #[derive(Debug)]
 pub enum FormatError {
@@ -129,7 +129,7 @@ struct PageFile {
 }
 
 /// Page migrations, indexed by source version: `PAGE_STEPS[0]` turns v1 into v2.
-const PAGE_STEPS: &[fn(Value) -> Value] = &[page_v1_to_v2];
+const PAGE_STEPS: &[fn(Value) -> Value] = &[page_v1_to_v2, page_v2_to_v3];
 /// Formats accepted as older versions of a page.
 const PAGE_ALIASES: &[&str] = &[LEGACY_FORMAT];
 
@@ -141,6 +141,23 @@ fn page_v1_to_v2(mut v: Value) -> Value {
     }
     if v.get("name").is_none() {
         v["name"] = json!("Page 1");
+    }
+    v
+}
+
+/// v2 → v3: `style.fill: "#rrggbb"` becomes `style.fills: [{type: solid, color}]`.
+fn page_v2_to_v3(mut v: Value) -> Value {
+    if let Some(nodes) = v.get_mut("nodes").and_then(|n| n.as_array_mut()) {
+        for n in nodes {
+            let Some(style) = n.get_mut("style").and_then(|s| s.as_object_mut()) else {
+                continue;
+            };
+            if let Some(fill) = style.remove("fill")
+                && let Some(c) = fill.as_str()
+            {
+                style.insert("fills".into(), json!([{ "type": "solid", "color": c }]));
+            }
+        }
     }
     v
 }
@@ -284,6 +301,22 @@ mod tests {
             page_from_json(broken),
             Err(FormatError::Invalid(_))
         ));
+    }
+
+    #[test]
+    fn v2_fill_migrates_to_fill_layers() {
+        let v2 = r##"{"format":"paper-rs-page","version":2,"id":"a","name":"P","next_id":3,
+            "root":[1,2],"nodes":[
+            {"id":1,"name":"R","type":"rect","rect":{"x":0,"y":0,"w":5,"h":5},
+             "style":{"fill":"#ff0000","stroke":null,"stroke_width":1,"corner_radius":2,"opacity":1}},
+            {"id":2,"name":"E","type":"ellipse","rect":{"x":0,"y":0,"w":5,"h":5},
+             "style":{"fill":null,"stroke":"#000000","stroke_width":1,"corner_radius":0,"opacity":1}}]}"##;
+        let p = page_from_json(v2).unwrap();
+        let r = p.doc.get(NodeId(1)).unwrap();
+        assert_eq!(r.style.fill(), Some(crate::model::Color::rgb(255, 0, 0)));
+        assert_eq!(r.style.corner_radius, 2.0);
+        assert!(p.doc.get(NodeId(2)).unwrap().style.fills.is_empty());
+        assert!(page_to_json(&p).contains("\"version\": 3"));
     }
 
     #[test]

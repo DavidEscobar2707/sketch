@@ -23,7 +23,7 @@ fn m1_infinite_canvas_pan_and_zoom() {
         NodeKind::Rect,
         Rect::new(100.0, 100.0, 120.0, 80.0),
     );
-    n.style.fill = Some(ACCENT);
+    n.style.set_fill(Some(ACCENT));
     let id = e.add_node(n, None);
     let far = Node::new(
         NodeId(0),
@@ -239,10 +239,16 @@ fn m3_shapes_frames_and_text() {
     ev_drag(&mut e, v2(480.0, 400.0), v2(640.0, 480.0), 4000.0, true);
     let overflow = e.selection[0];
     e.edit("color", |tx| {
-        tx.node_mut(rect_id).unwrap().style.fill = Some(Color::rgb(0xff, 0xe0, 0x82));
+        tx.node_mut(rect_id)
+            .unwrap()
+            .style
+            .set_fill(Some(Color::rgb(0xff, 0xe0, 0x82)));
         tx.node_mut(rect_id).unwrap().style.corner_radius = 16.0;
-        tx.node_mut(ell_id).unwrap().style.fill = Some(ACCENT);
-        tx.node_mut(overflow).unwrap().style.fill = Some(Color::rgb(0xe0, 0x4f, 0x5f));
+        tx.node_mut(ell_id).unwrap().style.set_fill(Some(ACCENT));
+        tx.node_mut(overflow)
+            .unwrap()
+            .style
+            .set_fill(Some(Color::rgb(0xe0, 0x4f, 0x5f)));
     });
     // Text typed through the text tool.
     e.handle(InputEvent::KeyDown {
@@ -342,7 +348,7 @@ fn m4_select_move_resize_snap() {
     let mut e = editor(900.0, 520.0);
     let mk = |e: &mut Editor, r: Rect, c: Color| {
         let mut n = Node::new(NodeId(0), NodeKind::Rect, r);
-        n.style.fill = Some(c);
+        n.style.set_fill(Some(c));
         n.style.corner_radius = 8.0;
         e.add_node(n, None)
     };

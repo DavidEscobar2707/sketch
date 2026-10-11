@@ -1,12 +1,16 @@
-//! Document + camera → screen-space triangle batches.
+//! Document + camera → world-space cached meshes, plus the screen-space overlay.
 
+use super::draw;
 use super::mesh::{Batch, MeshBuilder};
+use super::tess::{Piece, Tess};
 use crate::editor::{Editor, hit, snap::Guide};
 use crate::geom::{Camera, Rect, V2, v2};
-use crate::ink;
+use crate::model::{BlendMode, Node};
 use crate::model::{Color, Document, NodeId, NodeKind, TextAlign};
 use crate::text;
 use lyon::tessellation::{FillRule, LineCap};
+use std::collections::HashMap;
+use std::sync::Arc;
 
 pub const CANVAS_BG: Color = Color::rgb(0xee, 0xee, 0xf0);
 pub const GRID_DOT: Color = Color::rgb(0xcf, 0xcf, 0xd6);
@@ -69,131 +73,167 @@ pub fn grid(mb: &mut MeshBuilder, v: &View) {
     }
 }
 
-/// Draw the given roots (or the whole document) with their subtrees.
-pub fn document(mb: &mut MeshBuilder, v: &View, roots: Option<&[NodeId]>) {
-    let all = v.doc.root.clone();
-    let roots = roots.unwrap_or(&all);
-    let base_clip = Some(v.canvas_rect());
-    for id in roots {
-        let opacity: f64 = v
-            .doc
-            .ancestors(*id)
-            .iter()
-            .filter_map(|a| v.doc.get(*a))
-            .map(|n| n.style.opacity)
-            .product();
-        node(mb, v, *id, base_clip, opacity);
-    }
-    mb.set_clip(None);
+// ---------------------------------------------------------------------------------- world scene
+
+/// One node's cached triangles plus where they are clipped and how they blend.
+#[derive(Clone)]
+pub struct Item {
+    pub id: NodeId,
+    pub pieces: Arc<Vec<Piece>>,
+    /// World-space clip rectangle (from clipping frames).
+    pub clip: Option<Rect>,
+    pub blend: BlendMode,
 }
 
-fn node(mb: &mut MeshBuilder, v: &View, id: NodeId, clip: Option<Rect>, parent_opacity: f64) {
-    let Some(n) = v.doc.get(id) else { return };
-    if !n.visible {
-        return;
+struct Entry {
+    node: Node,
+    wr: Rect,
+    opacity: f64,
+    bucket: i32,
+    pieces: Arc<Vec<Piece>>,
+    used: bool,
+}
+
+/// Per-node tessellation cache. A node is re-tessellated only when it (or its world position,
+/// inherited opacity or the zoom bucket) changes, so panning and idle frames do no work.
+#[derive(Default)]
+pub struct SceneCache {
+    entries: HashMap<NodeId, Entry>,
+    /// Tessellations performed during the last `items` call (for tests and profiling).
+    pub last_misses: usize,
+}
+
+/// Zoom buckets are powers of two: geometry built for 2^b is accurate up to 2^(b+1).
+pub fn zoom_bucket(zoom: f64) -> i32 {
+    zoom.max(1e-6).log2().floor() as i32
+}
+
+impl SceneCache {
+    pub fn clear(&mut self) {
+        self.entries.clear();
     }
-    let Some(wr) = v.doc.world_rect(id) else {
-        return;
-    };
-    let sr = v.rect_to_screen(&wr);
-    let opacity = parent_opacity * n.style.opacity;
-    let z = v.camera.zoom;
-    let visible_area = clip.unwrap_or_else(|| v.canvas_rect());
-    let pad = match &n.kind {
-        NodeKind::Line { .. } | NodeKind::Stroke { .. } => 8.0 + n.style.stroke_width * z,
-        _ => n.style.stroke_width * z,
-    };
-    let on_screen = sr.inflate(pad).intersects(&visible_area);
-    mb.set_clip(clip);
-    let fill = n.style.fill.map(|c| c.to_f32(opacity));
-    let stroke = n.style.stroke.map(|c| c.to_f32(opacity));
-    let sw = (n.style.stroke_width * z) as f32;
-    match &n.kind {
-        NodeKind::Frame { clip: clips } => {
-            if on_screen {
-                let path = MeshBuilder::rounded_rect_path(sr, n.style.corner_radius * z);
-                if let Some(f) = fill {
-                    mb.fill_path(&path, f, FillRule::NonZero);
-                }
-                if let Some(s) = stroke {
-                    mb.stroke_path(&path, sw, s, LineCap::Butt);
-                }
+
+    /// Items for `roots` (or the whole page) in paint order. `cull` skips subtrees outside a
+    /// world rect.
+    pub fn items(
+        &mut self,
+        doc: &Document,
+        roots: Option<&[NodeId]>,
+        zoom: f64,
+        cull: Option<Rect>,
+    ) -> Vec<Item> {
+        let bucket = zoom_bucket(zoom);
+        let tz = 2f64.powi(bucket);
+        let mut tess = Tess::new(tz);
+        let mut out = Vec::new();
+        self.last_misses = 0;
+        for e in self.entries.values_mut() {
+            e.used = false;
+        }
+        let all = doc.root.clone();
+        for id in roots.unwrap_or(&all) {
+            let op = draw::inherited_opacity(doc, *id);
+            let origin = doc.parent_origin(doc.get(*id).and_then(|n| n.parent));
+            self.walk(
+                doc, *id, origin, None, op, bucket, &mut tess, cull, &mut out,
+            );
+        }
+        // Evict entries for deleted or long-unseen nodes when the cache grows large.
+        let used = self.entries.values().filter(|e| e.used).count();
+        if self.entries.len() > used * 4 + 2000 {
+            self.entries.retain(|_, e| e.used);
+        }
+        out
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn walk(
+        &mut self,
+        doc: &Document,
+        id: NodeId,
+        origin: V2,
+        clip: Option<Rect>,
+        parent_opacity: f64,
+        bucket: i32,
+        tess: &mut Tess,
+        cull: Option<Rect>,
+        out: &mut Vec<Item>,
+    ) {
+        let Some(n) = doc.get(id) else { return };
+        if !n.visible {
+            return;
+        }
+        let wr = n.rect.translate(origin);
+        let opacity = parent_opacity * n.style.opacity;
+        let bounds = draw::draw_bounds(n, wr);
+        let visible = cull.is_none_or(|c| c.intersects(&bounds))
+            && clip.is_none_or(|c| c.intersects(&bounds));
+        if visible && !n.is_group() {
+            let hit = self.entries.get(&id).is_some_and(|e| {
+                e.bucket == bucket && e.wr == wr && e.opacity == opacity && e.node == *n
+            });
+            if !hit {
+                self.last_misses += 1;
+                let d = draw::node_draw(n, wr, opacity);
+                let pieces = Arc::new(tess.ops(&d.ops));
+                self.entries.insert(
+                    id,
+                    Entry {
+                        node: n.clone(),
+                        wr,
+                        opacity,
+                        bucket,
+                        pieces,
+                        used: true,
+                    },
+                );
             }
-            let child_clip = if *clips {
-                match clip.map_or(Some(sr), |c| c.intersection(&sr)) {
+            let e = self.entries.get_mut(&id).unwrap();
+            e.used = true;
+            if !e.pieces.is_empty() {
+                out.push(Item {
+                    id,
+                    pieces: e.pieces.clone(),
+                    clip,
+                    blend: n.style.blend,
+                });
+            }
+        }
+        if n.children.is_empty() {
+            return;
+        }
+        let child_clip = match n.kind {
+            NodeKind::Frame { clip: true } => {
+                match clip.map_or(Some(wr), |c| c.intersection(&wr)) {
                     Some(c) => Some(c),
                     None => return,
                 }
-            } else {
-                clip
-            };
-            if *clips && !on_screen {
-                return;
             }
-            for c in &n.children {
-                node(mb, v, *c, child_clip, opacity);
-            }
-            mb.set_clip(clip);
+            _ => clip,
+        };
+        if matches!(n.kind, NodeKind::Frame { clip: true })
+            && cull.is_some_and(|c| !c.intersects(&wr))
+        {
+            return;
         }
-        _ if !on_screen => {}
-        NodeKind::Rect => {
-            let path = MeshBuilder::rounded_rect_path(sr, n.style.corner_radius * z);
-            if let Some(f) = fill {
-                mb.fill_path(&path, f, FillRule::NonZero);
-            }
-            if let Some(s) = stroke {
-                mb.stroke_path(&path, sw, s, LineCap::Butt);
-            }
-        }
-        NodeKind::Ellipse => {
-            let path = MeshBuilder::ellipse_path(sr);
-            if let Some(f) = fill {
-                mb.fill_path(&path, f, FillRule::NonZero);
-            }
-            if let Some(s) = stroke {
-                mb.stroke_path(&path, sw, s, LineCap::Butt);
-            }
-        }
-        NodeKind::Line { a, b } => {
-            if let Some(s) = stroke {
-                let path =
-                    MeshBuilder::polygon_path(&[sr.min() + *a * z, sr.min() + *b * z], false);
-                mb.stroke_path(&path, sw.max(0.5), s, LineCap::Round);
-            }
-        }
-        NodeKind::Text {
-            text: t,
-            font_size,
-            auto_width,
-            align,
-        } => {
-            let color = fill.unwrap_or(rgba(Color::INK));
-            draw_text(
-                mb,
-                t,
-                *font_size,
-                (!auto_width).then_some(n.rect.w),
-                *align,
-                sr.min(),
-                z,
-                color,
-            );
-        }
-        NodeKind::Stroke {
-            points,
-            width,
-            thinning,
-        } => {
-            let color = fill.unwrap_or(rgba(Color::INK));
-            let outline = ink::outline(points, *width, *thinning);
-            let pts: Vec<V2> = outline.iter().map(|q| sr.min() + *q * z).collect();
-            mb.fill_path(
-                &MeshBuilder::polygon_path(&pts, true),
-                color,
-                FillRule::NonZero,
-            );
+        let o = wr.min();
+        for c in &n.children {
+            self.walk(doc, *c, o, child_clip, opacity, bucket, tess, cull, out);
         }
     }
+}
+
+/// Everything the GPU draws for the canvas: screen-space underlay (background, grid), the
+/// world-space document, and the screen-space overlay (selection, guides, labels).
+pub struct CanvasFrame {
+    pub under: Vec<Batch>,
+    pub items: Vec<Item>,
+    pub over: Vec<Batch>,
+    pub camera: Camera,
+    /// Canvas top-left in the render target, logical px.
+    pub offset: V2,
+    /// Canvas rect in logical px (world items are scissored to it).
+    pub viewport: Rect,
 }
 
 /// Draw text with its box's top-left at `origin` (screen px) at screen scale `z`.
@@ -212,8 +252,8 @@ pub fn draw_text(
     let px = font_size * z;
     if px < 2.5 {
         // Too small to read: draw "greeked" bars instead of glyphs.
-        let lh = text::line_height(font_size) * z;
         for l in &layout.lines {
+            let lh = l.height * z;
             if l.width > 0.0 {
                 let x = origin.x + l.carets[0] * z;
                 mb.rect(
@@ -224,9 +264,9 @@ pub fn draw_text(
         }
         return;
     }
-    let s = (font_size / text::face().units_per_em() as f64 * z) as f32;
     for g in &layout.glyphs {
-        let m = text::glyph_mesh(g.gid);
+        let s = (g.size / text::face_of(g.face).units_per_em() as f64 * z) as f32;
+        let m = text::glyph_mesh(g.face, g.gid);
         if m.indices.is_empty() {
             continue;
         }
@@ -293,16 +333,18 @@ pub fn overlay(mb: &mut MeshBuilder, ed: &Editor, offset: V2) {
 
     if let Some(te) = &ed.text_edit {
         if let (Some(n), Some(wr)) = (ed.doc.get(te.id), ed.doc.world_rect(te.id))
-            && let NodeKind::Text {
-                text: t,
-                font_size,
-                auto_width,
-                align,
-            } = &n.kind
+            && let Some(l) = text::layout_node(n)
         {
-            let l = text::layout(t, *font_size, (!auto_width).then_some(n.rect.w), *align);
-            let (x, top, h) = l.caret(te.caret);
             let o = v.to_screen(wr.min());
+            if let Some(a) = te.anchor.filter(|a| *a != te.caret) {
+                for (x, top, w, h) in l.selection_rects(a, te.caret) {
+                    mb.rect(
+                        Rect::new(o.x + x * z, o.y + top * z, w * z, h * z),
+                        [accent[0], accent[1], accent[2], 0.25],
+                    );
+                }
+            }
+            let (x, top, h) = l.caret(te.caret);
             mb.rect(
                 Rect::new(o.x + x * z - 0.75, o.y + top * z, 1.5, h * z),
                 accent,
@@ -373,16 +415,8 @@ fn outline_node(mb: &mut MeshBuilder, v: &View, id: NodeId, sr: Rect, color: [f3
     let n = v.doc.get(id).unwrap();
     let z = v.camera.zoom;
     match &n.kind {
-        NodeKind::Ellipse => {
-            mb.stroke_path(
-                &MeshBuilder::ellipse_path(sr),
-                w as f32,
-                color,
-                LineCap::Butt,
-            );
-        }
-        NodeKind::Line { a, b } => {
-            mb.line(sr.min() + *a * z, sr.min() + *b * z, w, color);
+        NodeKind::Frame { .. } | NodeKind::Rect | NodeKind::Text { .. } | NodeKind::Group => {
+            mb.rect_outline(sr, w, color)
         }
         NodeKind::Stroke { points, .. } if points.len() > 1 => {
             let pts: Vec<V2> = points.iter().map(|q| sr.min() + q.pos() * z).collect();
@@ -394,7 +428,13 @@ fn outline_node(mb: &mut MeshBuilder, v: &View, id: NodeId, sr: Rect, color: [f3
             );
             mb.rect_outline(sr, 1.0, [color[0], color[1], color[2], 0.5]);
         }
-        _ => mb.rect_outline(sr, w, color),
+        _ => {
+            let wr = v.doc.world_rect(id).unwrap();
+            if let Some(path) = draw::shape_path(n, wr) {
+                let sp = path.map(|p| v.to_screen(p));
+                mb.stroke_path(&sp.to_lyon(), w as f32, color, LineCap::Round);
+            }
+        }
     }
 }
 
@@ -408,20 +448,53 @@ fn fmt_num(x: f64) -> String {
 }
 
 /// Full interactive canvas: background grid, document, overlay.
-pub fn canvas(ed: &Editor, offset: V2, show_grid: bool) -> Vec<Batch> {
-    let mut mb = MeshBuilder::default();
+pub fn canvas(ed: &Editor, cache: &mut SceneCache, offset: V2, show_grid: bool) -> CanvasFrame {
     let v = View {
         doc: &ed.doc,
         camera: ed.camera,
         viewport: ed.viewport,
         offset,
     };
-    mb.set_clip(Some(v.canvas_rect()));
-    mb.rect(v.canvas_rect(), rgba(CANVAS_BG));
+    let mut under = MeshBuilder::default();
+    under.set_clip(Some(v.canvas_rect()));
+    under.rect(v.canvas_rect(), rgba(CANVAS_BG));
     if show_grid {
-        grid(&mut mb, &v);
+        grid(&mut under, &v);
     }
-    document(&mut mb, &v, None);
-    overlay(&mut mb, ed, offset);
-    mb.finish()
+    let vis = ed.camera.visible_world(ed.viewport);
+    let cull = vis.inflate(vis.w.max(vis.h) * 0.5);
+    let items = cache.items(&ed.doc, None, ed.camera.zoom, Some(cull));
+    let mut over = MeshBuilder::default();
+    overlay(&mut over, ed, offset);
+    CanvasFrame {
+        under: under.finish(),
+        items,
+        over: over.finish(),
+        camera: ed.camera,
+        offset,
+        viewport: v.canvas_rect(),
+    }
+}
+
+/// A frame that draws only `roots` (or the page) with no chrome: exports and thumbnails.
+pub fn export_frame(
+    doc: &Document,
+    roots: Option<&[NodeId]>,
+    camera: Camera,
+    size_px: V2,
+    background: Option<Color>,
+) -> CanvasFrame {
+    let mut under = MeshBuilder::default();
+    if let Some(bg) = background {
+        under.rect(Rect::new(0.0, 0.0, size_px.x, size_px.y), rgba(bg));
+    }
+    let items = SceneCache::default().items(doc, roots, camera.zoom, None);
+    CanvasFrame {
+        under: under.finish(),
+        items,
+        over: Vec::new(),
+        camera,
+        offset: V2::ZERO,
+        viewport: Rect::new(0.0, 0.0, size_px.x, size_px.y),
+    }
 }

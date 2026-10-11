@@ -3,6 +3,7 @@
 use crate::geom::{Rect, V2, v2};
 use crate::ink;
 use crate::model::{Document, NodeId, NodeKind};
+use crate::render::draw;
 
 /// Tolerance for thin geometry, in screen pixels.
 const HIT_SLOP_PX: f64 = 4.0;
@@ -25,16 +26,7 @@ pub fn node_contains(doc: &Document, id: NodeId, p: V2, zoom: f64) -> bool {
     let slop = HIT_SLOP_PX / zoom;
     match &n.kind {
         NodeKind::Frame { .. } | NodeKind::Rect | NodeKind::Text { .. } => r.contains(p),
-        NodeKind::Ellipse => {
-            let c = r.center();
-            let (rx, ry) = ((r.w * 0.5).max(1e-9), (r.h * 0.5).max(1e-9));
-            let d = ((p.x - c.x) / rx).powi(2) + ((p.y - c.y) / ry).powi(2);
-            d <= 1.0 || (r.w.min(r.h) * zoom < 8.0 && r.inflate(slop).contains(p))
-        }
-        NodeKind::Line { a, b } => {
-            let o = r.min();
-            ink::segment_distance(o + *a, o + *b, p) <= n.style.stroke_width * 0.5 + slop
-        }
+        NodeKind::Group => false,
         NodeKind::Stroke {
             points,
             width,
@@ -46,6 +38,30 @@ pub fn node_contains(doc: &Document, id: NodeId, p: V2, zoom: f64) -> bool {
             let local = p - r.min();
             let max_r = ink::radius(*width, *thinning, 1.0);
             ink::distance_to_polyline(points, local) <= max_r + slop
+        }
+        _ => {
+            if !draw::draw_bounds(n, r).inflate(slop).contains(p) {
+                return false;
+            }
+            let Some(path) = draw::shape_path(n, r) else {
+                return false;
+            };
+            let tol = 0.25 / zoom;
+            let even_odd = matches!(
+                n.kind,
+                NodeKind::Path {
+                    fill_rule: crate::model::FillRule::EvenOdd,
+                    ..
+                }
+            );
+            // Tiny shapes are easier to grab by their box.
+            if r.w.min(r.h) * zoom < 8.0 && draw::is_area(n) && r.inflate(slop).contains(p) {
+                return true;
+            }
+            let filled =
+                draw::is_area(n) && (!n.style.fills.is_empty() || n.style.stroke.is_none());
+            (filled && path.contains(p, even_odd, tol))
+                || path.distance(p, tol) <= n.style.stroke_width * 0.5 + slop
         }
     }
 }

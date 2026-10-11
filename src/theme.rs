@@ -311,6 +311,13 @@ pub enum Icon {
     More,
     Page,
     Restore,
+    Group,
+    Pen,
+    Polygon,
+    Star,
+    Component,
+    Instance,
+    Image,
 }
 
 pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
@@ -473,6 +480,76 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color3
                 egui::StrokeKind::Middle,
             );
             line(&[pt(6.0, 3.0), pt(6.0, 13.0)]);
+        }
+        Icon::Group => {
+            let dash = |a: Pos2, b: Pos2| {
+                painter.add(egui::Shape::dashed_line(&[a, b], st, 1.6 * u, 1.4 * u));
+            };
+            dash(pt(2.5, 2.5), pt(13.5, 2.5));
+            dash(pt(13.5, 2.5), pt(13.5, 13.5));
+            dash(pt(13.5, 13.5), pt(2.5, 13.5));
+            dash(pt(2.5, 13.5), pt(2.5, 2.5));
+            painter.rect_stroke(
+                Rect::from_min_max(pt(5.5, 5.5), pt(10.5, 10.5)),
+                1.0 * u,
+                st,
+                egui::StrokeKind::Middle,
+            );
+        }
+        Icon::Pen => {
+            closed(&[
+                pt(8.0, 2.0),
+                pt(12.5, 8.5),
+                pt(10.0, 13.5),
+                pt(6.0, 13.5),
+                pt(3.5, 8.5),
+            ]);
+            line(&[pt(8.0, 2.0), pt(8.0, 8.0)]);
+            painter.circle_stroke(pt(8.0, 9.0), 1.0 * u, st);
+        }
+        Icon::Polygon => {
+            closed(&[pt(8.0, 2.0), pt(14.0, 13.5), pt(2.0, 13.5)]);
+        }
+        Icon::Star => {
+            let pts: Vec<Pos2> = (0..10)
+                .map(|i| {
+                    let a = -std::f32::consts::FRAC_PI_2 + i as f32 * std::f32::consts::PI / 5.0;
+                    let r = if i % 2 == 0 { 6.5 } else { 2.8 };
+                    pt(8.0 + a.cos() * r, 8.5 + a.sin() * r)
+                })
+                .collect();
+            closed(&pts);
+        }
+        Icon::Component | Icon::Instance => {
+            let d = [
+                [pt(8.0, 1.8), pt(10.2, 4.0), pt(8.0, 6.2), pt(5.8, 4.0)],
+                [pt(8.0, 9.8), pt(10.2, 12.0), pt(8.0, 14.2), pt(5.8, 12.0)],
+                [pt(4.0, 5.8), pt(6.2, 8.0), pt(4.0, 10.2), pt(1.8, 8.0)],
+                [pt(12.0, 5.8), pt(14.2, 8.0), pt(12.0, 10.2), pt(9.8, 8.0)],
+            ];
+            if icon == Icon::Component {
+                for q in d {
+                    closed(&q);
+                }
+            } else {
+                closed(&[pt(8.0, 1.8), pt(14.2, 8.0), pt(8.0, 14.2), pt(1.8, 8.0)]);
+            }
+        }
+        Icon::Image => {
+            painter.rect_stroke(
+                Rect::from_min_max(pt(2.0, 3.0), pt(14.0, 13.0)),
+                1.5 * u,
+                st,
+                egui::StrokeKind::Middle,
+            );
+            line(&[
+                pt(2.5, 12.0),
+                pt(6.5, 7.5),
+                pt(9.5, 10.5),
+                pt(11.0, 9.0),
+                pt(13.5, 11.5),
+            ]);
+            painter.circle_stroke(pt(10.5, 5.8), 1.1 * u, st);
         }
         Icon::Grid => {
             for (x, y) in [(2.5, 2.5), (9.0, 2.5), (2.5, 9.0), (9.0, 9.0)] {
