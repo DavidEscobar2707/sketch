@@ -16,8 +16,27 @@ are credited in `THIRD_PARTY.md`.
 | P2: multiple pages, infinite canvas per page | ✅ done | `src/editor/pages.rs`, `src/ui/pages.rs`, `tests/projects.rs::m2_*`, `milestone2_pages.png` |
 | P3: Figma core | ✅ done | `src/layout.rs`, `src/editor/{structure,vector_ops,text_edit}.rs`, `src/render/{draw,tess}.rs`, `src/ui/inspector.rs`, `tests/figma.rs`, `tests/perf.rs`, `milestone3_figma_core.png`, `milestone3_canvas.png` |
 | P4: Excalidraw core | ✅ done | `src/render/rough.rs`, `src/connector.rs`, `src/editor/whiteboard.rs`, `src/library.rs`, `src/ui/library.rs`, `tests/excalidraw.rs`, `milestone4_whiteboard.png`, `THIRD_PARTY.md` |
-| P5: inspector, layers drag-reorder, command palette, shortcuts | ⏳ | |
+| P5: inspector, layers drag-reorder, command palette, shortcuts | ✅ done | `src/ui/{inspector,palette}.rs`, `src/ui/mod.rs` (layers drag, help), `src/editor/{commands,shortcuts}.rs`, `src/macos.rs`, `tests/workflow.rs`, `milestone5_palette.png`, `milestone5_shortcuts.png`, `milestone5_inspector.png` |
 | P6: import/export (PNG/SVG/PDF, .excalidraw, SVG), cross-project paste | ⏳ | |
+
+### P5 notes
+
+* **Inspector**: grouped macOS-style sections (header actions, alignment icons, position &
+  size with per-corner radii, constraints / sizing, auto layout, text, fills with gradients
+  and images, stroke, layer blend/opacity, hand-drawn, arrow, sticky). Number fields scrub
+  and coalesce into one undo step; edits inside instances become overrides.
+* **Layers tree**: drag rows to reorder — above / below a row, or into a frame or group (the
+  middle of the row); the canvas position is kept and the move is one undo step.
+* **Command palette** (⌘K, also ⌘⇧/): fuzzy search over every bound action, all tools, pages,
+  library items and layers (select + zoom). Arrow keys, Enter, Esc.
+* **Shortcuts**: one binding table drives dispatch, the grouped help panel (⌘/ or ?), the egui
+  menu bar and the native macOS menu (⌘ chords become key equivalents; single keys are
+  shown in titles). Added Tab/⇧Tab sibling selection, ⇧Enter parent, ⇧H/⇧V flip,
+  ⌘⌥C/⌘⌥V copy/paste properties, ⌥-drag duplicate (one undo step), PageUp/PageDown pages,
+  ⌘R rename, ⌘\ hide UI, ⇧0 zoom 100%, Excalidraw number keys. 100+ bindings, checked for
+  conflicts by a test.
+* Deferred: Figma's number-key opacity (the digits pick tools, as in Excalidraw), drag of
+  multiple layers at once in the tree, customizable shortcuts.
 
 ### P4 notes
 

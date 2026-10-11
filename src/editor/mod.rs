@@ -2,6 +2,7 @@
 //!
 //! It consumes platform-agnostic [`InputEvent`]s, so every interaction can be scripted in tests.
 
+pub mod commands;
 pub mod hit;
 pub mod input;
 pub mod pages;
@@ -263,6 +264,9 @@ pub struct Editor {
     /// Hand-drawn style for new shapes (None = clean lines).
     pub sketch: Option<crate::model::rough::Rough>,
     pub sticky_color: Color,
+    /// Requests for the chrome (command palette, rename...).
+    pub ui_events: Vec<commands::UiEvent>,
+    clipboard_style: Option<(crate::model::Style, crate::model::TextStyle)>,
 }
 
 impl Default for Editor {
@@ -322,6 +326,8 @@ impl Editor {
             arrow_route: crate::model::Route::Straight,
             sketch: None,
             sticky_color: Color::rgb(0xff, 0xdf, 0x6b),
+            ui_events: Vec::new(),
+            clipboard_style: None,
         }
     }
 
@@ -1051,12 +1057,26 @@ impl Editor {
                     };
                     return;
                 }
-                let origins = self.top_selection_world();
+                let mut origins = self.top_selection_world();
                 if origins.is_empty() {
                     return;
                 }
                 let bounds0 = Rect::union_all(origins.iter().map(|(_, r)| r)).unwrap();
-                self.begin("Move");
+                self.begin(if self.mods.alt { "Duplicate" } else { "Move" });
+                if self.mods.alt {
+                    // Alt-drag drags a copy, leaving the original in place (one undo step).
+                    let roots: Vec<NodeId> = origins.iter().map(|(id, _)| *id).collect();
+                    let world: Vec<Rect> = origins.iter().map(|(_, r)| *r).collect();
+                    let nodes: Vec<Node> = roots
+                        .iter()
+                        .flat_map(|r| self.doc.subtree(*r))
+                        .filter_map(|id| self.doc.get(id).cloned())
+                        .collect();
+                    let new =
+                        insert_subtrees_tx(&mut self.tx(), &nodes, &roots, &world, V2::ZERO, true);
+                    origins = new.iter().copied().zip(world).collect();
+                    self.selection = new;
+                }
                 // Auto-layout parents hold still while their children are dragged around.
                 self.layout_suspended = origins
                     .iter()
@@ -1930,6 +1950,31 @@ impl Editor {
             A::Strikethrough => self.toggle_strike(),
             A::PlaceImage => self.requests.push(AppRequest::PlaceImage),
             A::ToggleSketch => self.toggle_sketch(),
+            A::CommandPalette => self.ui_events.push(commands::UiEvent::TogglePalette),
+            A::Rename => {
+                if let Some(id) = self.selection.first() {
+                    self.ui_events.push(commands::UiEvent::Rename(*id));
+                }
+            }
+            A::ToggleUi => self.ui_events.push(commands::UiEvent::ToggleUi),
+            A::ToggleHelp => self.ui_events.push(commands::UiEvent::ToggleHelp),
+            A::ToggleGrid => self.ui_events.push(commands::UiEvent::ToggleGrid),
+            A::SelectNext => self.select_sibling(true),
+            A::SelectPrev => self.select_sibling(false),
+            A::SelectParent => self.select_parent(),
+            A::NextPage => {
+                let i = (self.active_page + 1) % self.pages.len();
+                self.switch_page(i);
+            }
+            A::PrevPage => {
+                let i = (self.active_page + self.pages.len() - 1) % self.pages.len();
+                self.switch_page(i);
+            }
+            A::FlipH => self.flip(0),
+            A::FlipV => self.flip(1),
+            A::CopyProps => self.copy_props(),
+            A::PasteProps => self.paste_props(),
+            A::Home => self.requests.push(AppRequest::Home),
         }
     }
 
@@ -2041,63 +2086,7 @@ impl Editor {
         same_page: bool,
     ) -> Vec<NodeId> {
         self.edit(label, |tx| {
-            let mut map = std::collections::HashMap::new();
-            for n in nodes {
-                map.insert(n.id, tx.alloc_id());
-            }
-            let remap = |c: &mut Node, map: &std::collections::HashMap<NodeId, NodeId>| {
-                if let NodeKind::Connector { start, end, .. } = &mut c.kind {
-                    for b in [start, end] {
-                        if let Some(bb) = b {
-                            match map.get(&bb.node) {
-                                Some(n) => bb.node = *n,
-                                None if same_page => {}
-                                None => *b = None,
-                            }
-                        }
-                    }
-                }
-                if let Some(l) = &mut c.instance {
-                    match map.get(&l.main) {
-                        Some(n) => l.main = *n,
-                        None if same_page => {}
-                        None => c.instance = None,
-                    }
-                }
-            };
-            let mut new_roots = Vec::new();
-            for (i, r) in roots.iter().enumerate() {
-                let Some(n) = nodes.iter().find(|n| n.id == *r) else {
-                    continue;
-                };
-                // Same page: next to the original if its parent still exists. Elsewhere: root.
-                let parent = n
-                    .parent
-                    .filter(|p| same_page && tx.doc().nodes.contains_key(p));
-                let w = world.get(i).copied().unwrap_or(n.rect);
-                let mut copy = n.clone();
-                copy.id = map[&n.id];
-                copy.children = n.children.iter().map(|c| map[c]).collect();
-                copy.rect = w.translate(offset - tx.doc().parent_origin(parent));
-                remap(&mut copy, &map);
-                let id = tx.insert(copy, parent, None);
-                for d in nodes
-                    .iter()
-                    .filter(|d| d.id != n.id && is_desc(nodes, d.id, n.id))
-                {
-                    let mut c = d.clone();
-                    c.id = map[&d.id];
-                    c.parent = d.parent.map(|p| map[&p]);
-                    c.children = d.children.iter().map(|x| map[x]).collect();
-                    remap(&mut c, &map);
-                    tx.put(c);
-                }
-                new_roots.push(id);
-            }
-            for id in map.values() {
-                crate::editor::whiteboard::update_connector(tx, *id);
-            }
-            new_roots
+            insert_subtrees_tx(tx, nodes, roots, world, offset, same_page)
         })
     }
 
@@ -2222,6 +2211,74 @@ impl Editor {
         self.commit();
         id
     }
+}
+
+/// Insert copies of subtrees inside an open transaction (see `Editor::insert_subtrees`).
+pub fn insert_subtrees_tx(
+    tx: &mut Tx,
+    nodes: &[Node],
+    roots: &[NodeId],
+    world: &[Rect],
+    offset: V2,
+    same_page: bool,
+) -> Vec<NodeId> {
+    let mut map = std::collections::HashMap::new();
+    for n in nodes {
+        map.insert(n.id, tx.alloc_id());
+    }
+    let remap = |c: &mut Node, map: &std::collections::HashMap<NodeId, NodeId>| {
+        if let NodeKind::Connector { start, end, .. } = &mut c.kind {
+            for b in [start, end] {
+                if let Some(bb) = b {
+                    match map.get(&bb.node) {
+                        Some(n) => bb.node = *n,
+                        None if same_page => {}
+                        None => *b = None,
+                    }
+                }
+            }
+        }
+        if let Some(l) = &mut c.instance {
+            match map.get(&l.main) {
+                Some(n) => l.main = *n,
+                None if same_page => {}
+                None => c.instance = None,
+            }
+        }
+    };
+    let mut new_roots = Vec::new();
+    for (i, r) in roots.iter().enumerate() {
+        let Some(n) = nodes.iter().find(|n| n.id == *r) else {
+            continue;
+        };
+        // Same page: next to the original if its parent still exists. Elsewhere: root.
+        let parent = n
+            .parent
+            .filter(|p| same_page && tx.doc().nodes.contains_key(p));
+        let w = world.get(i).copied().unwrap_or(n.rect);
+        let mut copy = n.clone();
+        copy.id = map[&n.id];
+        copy.children = n.children.iter().map(|c| map[c]).collect();
+        copy.rect = w.translate(offset - tx.doc().parent_origin(parent));
+        remap(&mut copy, &map);
+        let id = tx.insert(copy, parent, None);
+        for d in nodes
+            .iter()
+            .filter(|d| d.id != n.id && is_desc(nodes, d.id, n.id))
+        {
+            let mut c = d.clone();
+            c.id = map[&d.id];
+            c.parent = d.parent.map(|p| map[&p]);
+            c.children = d.children.iter().map(|x| map[x]).collect();
+            remap(&mut c, &map);
+            tx.put(c);
+        }
+        new_roots.push(id);
+    }
+    for id in map.values() {
+        crate::editor::whiteboard::update_connector(tx, *id);
+    }
+    new_roots
 }
 
 /// A fresh process-wide document stamp.

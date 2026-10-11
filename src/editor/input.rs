@@ -75,6 +75,8 @@ pub enum Key {
     Down,
     Home,
     End,
+    PageUp,
+    PageDown,
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -54,6 +54,21 @@ pub enum Action {
     Strikethrough,
     PlaceImage,
     ToggleSketch,
+    CommandPalette,
+    Rename,
+    ToggleUi,
+    ToggleHelp,
+    ToggleGrid,
+    SelectNext,
+    SelectPrev,
+    SelectParent,
+    NextPage,
+    PrevPage,
+    FlipH,
+    FlipV,
+    CopyProps,
+    PasteProps,
+    Home,
 }
 
 impl Action {
@@ -136,6 +151,25 @@ fn bindings() -> Vec<(Key, Chord, Action, &'static str)> {
             A::ToggleSketch,
             "Hand-drawn style on/off",
         ),
+        (Char('k'), CMD, A::CommandPalette, "Command palette"),
+        (Char('/'), CMD_SHIFT, A::CommandPalette, "Command palette"),
+        (Char('r'), CMD, A::Rename, "Rename layer"),
+        (Char('\\'), CMD, A::ToggleUi, "Show / hide UI"),
+        (Char('/'), CMD, A::ToggleHelp, "Keyboard shortcuts"),
+        (Char('?'), SHIFT, A::ToggleHelp, "Keyboard shortcuts"),
+        (Char('\''), CMD_SHIFT, A::ToggleGrid, "Show / hide dot grid"),
+        (Tab, PLAIN, A::SelectNext, "Select next sibling"),
+        (Tab, SHIFT, A::SelectPrev, "Select previous sibling"),
+        (Enter, SHIFT, A::SelectParent, "Select parent"),
+        (PageDown, PLAIN, A::NextPage, "Next page"),
+        (PageUp, PLAIN, A::PrevPage, "Previous page"),
+        (Char('h'), SHIFT, A::FlipH, "Flip horizontal"),
+        (Char('v'), SHIFT, A::FlipV, "Flip vertical"),
+        (Char('c'), CMD_ALT, A::CopyProps, "Copy properties"),
+        (Char('v'), CMD_ALT, A::PasteProps, "Paste properties"),
+        (Char('0'), SHIFT, A::Zoom100, "Zoom to 100%"),
+        (Char(')'), SHIFT, A::Zoom100, "Zoom to 100%"),
+        (Char('h'), CMD_ALT_SHIFT, A::Home, "All projects"),
         (Char('s'), SHIFT, A::Tool(Tool::Star), "Star tool"),
         (
             Char('b'),
@@ -261,6 +295,17 @@ fn bindings() -> Vec<(Key, Chord, Action, &'static str)> {
     ]
 }
 
+/// Key plus whether ⌘/Ctrl, Shift and Alt are required.
+pub type KeyChord = (Key, bool, bool, bool);
+
+/// Every binding: chord, action and description.
+pub fn all_bindings() -> Vec<(KeyChord, (), Action, &'static str)> {
+    bindings()
+        .into_iter()
+        .map(|(k, c, a, d)| ((k, c.cmd, c.shift, c.alt), (), a, d))
+        .collect()
+}
+
 pub fn lookup(key: &Key, m: Modifiers) -> Option<Action> {
     let key = match key {
         Key::Char(ch) => Key::Char(ch.to_ascii_lowercase()),
@@ -331,8 +376,289 @@ pub fn help_table() -> Vec<(String, &'static str)> {
     out
 }
 
+/// Help-panel section of an action.
+pub fn category(a: Action) -> &'static str {
+    use Action as A;
+    match a {
+        A::Tool(_) => "Tools",
+        A::New
+        | A::Open
+        | A::Save
+        | A::SaveAs
+        | A::ExportPng
+        | A::ExportSvg
+        | A::PlaceImage
+        | A::Home => "File",
+        A::Undo
+        | A::Redo
+        | A::Copy
+        | A::Cut
+        | A::Paste
+        | A::Duplicate
+        | A::Delete
+        | A::SelectAll
+        | A::CopyProps
+        | A::PasteProps
+        | A::Rename
+        | A::CommandPalette
+        | A::Escape
+        | A::EditText
+        | A::SelectNext
+        | A::SelectPrev
+        | A::SelectParent => "Edit",
+        A::ZoomIn
+        | A::ZoomOut
+        | A::Zoom100
+        | A::ZoomFit
+        | A::ZoomSelection
+        | A::ToggleSnapping
+        | A::ToggleGrid
+        | A::ToggleUi
+        | A::ToggleHelp
+        | A::NextPage
+        | A::PrevPage => "View",
+        A::Bold | A::Italic | A::Underline | A::Strikethrough => "Text",
+        A::Boolean(_) | A::Flatten | A::ToggleSketch => "Vector & style",
+        _ => "Arrange & layout",
+    }
+}
+
+/// Help entries grouped by section, in a stable order.
+pub fn help_sections() -> Vec<(&'static str, Vec<(String, &'static str)>)> {
+    let table = help_table();
+    let order = [
+        "Tools",
+        "Edit",
+        "Arrange & layout",
+        "Vector & style",
+        "Text",
+        "View",
+        "File",
+    ];
+    let binds = bindings();
+    order
+        .iter()
+        .map(|cat| {
+            let rows: Vec<(String, &'static str)> = table
+                .iter()
+                .filter(|(_, d)| {
+                    binds
+                        .iter()
+                        .find(|(_, _, _, bd)| bd == d)
+                        .is_some_and(|(_, _, a, _)| category(*a) == *cat)
+                })
+                .cloned()
+                .collect();
+            (*cat, rows)
+        })
+        .filter(|(_, r)| !r.is_empty())
+        .collect()
+}
+
+/// One entry of the application menus (shared by the egui menu bar and the macOS menu).
+pub enum MenuEntry {
+    Item(&'static str, Action),
+    Separator,
+    Submenu(&'static str, Vec<MenuEntry>),
+}
+
+/// The first binding of an action: (key, cmd, shift, alt).
+pub fn chord_of(a: Action) -> Option<(Key, bool, bool, bool)> {
+    bindings()
+        .into_iter()
+        .find(|(_, _, x, _)| *x == a)
+        .map(|(k, c, _, _)| (k, c.cmd, c.shift, c.alt))
+}
+
+/// The application menus.
+pub fn menus() -> Vec<(&'static str, Vec<MenuEntry>)> {
+    use super::vector_ops::BoolOp;
+    use Action as A;
+    use MenuEntry::{Item as I, Separator as S, Submenu as Sub};
+    vec![
+        (
+            "File",
+            vec![
+                I("New Project", A::New),
+                I("Import…", A::Open),
+                I("Place Image…", A::PlaceImage),
+                S,
+                I("Save Now", A::Save),
+                I("Duplicate Project", A::SaveAs),
+                I("All Projects", A::Home),
+                S,
+                I("Export PNG…", A::ExportPng),
+                I("Export SVG…", A::ExportSvg),
+            ],
+        ),
+        (
+            "Edit",
+            vec![
+                I("Undo", A::Undo),
+                I("Redo", A::Redo),
+                S,
+                I("Cut", A::Cut),
+                I("Copy", A::Copy),
+                I("Paste", A::Paste),
+                I("Duplicate", A::Duplicate),
+                I("Delete", A::Delete),
+                I("Select All", A::SelectAll),
+                S,
+                I("Copy Properties", A::CopyProps),
+                I("Paste Properties", A::PasteProps),
+                S,
+                I("Rename", A::Rename),
+                I("Command Palette…", A::CommandPalette),
+            ],
+        ),
+        (
+            "Object",
+            vec![
+                I("Group Selection", A::Group),
+                I("Ungroup", A::Ungroup),
+                I("Frame Selection", A::WrapInFrame),
+                S,
+                I("Create Component", A::CreateComponent),
+                I("Detach Instance", A::DetachInstance),
+                S,
+                I("Add Auto Layout", A::AddAutoLayout),
+                I("Remove Auto Layout", A::RemoveAutoLayout),
+                S,
+                Sub(
+                    "Align",
+                    vec![
+                        I("Align Left", A::Align(0, 0.0)),
+                        I("Align Horizontal Centers", A::Align(0, 0.5)),
+                        I("Align Right", A::Align(0, 1.0)),
+                        S,
+                        I("Align Top", A::Align(1, 0.0)),
+                        I("Align Vertical Centers", A::Align(1, 0.5)),
+                        I("Align Bottom", A::Align(1, 1.0)),
+                        S,
+                        I("Distribute Horizontal Spacing", A::Distribute(0)),
+                        I("Distribute Vertical Spacing", A::Distribute(1)),
+                    ],
+                ),
+                Sub(
+                    "Arrange",
+                    vec![
+                        I("Bring Forward", A::Forward),
+                        I("Send Backward", A::Backward),
+                        I("Bring to Front", A::ToFront),
+                        I("Send to Back", A::ToBack),
+                    ],
+                ),
+                S,
+                I("Flip Horizontal", A::FlipH),
+                I("Flip Vertical", A::FlipV),
+                S,
+                I("Show/Hide", A::ToggleVisible),
+                I("Lock/Unlock", A::ToggleLock),
+            ],
+        ),
+        (
+            "Vector",
+            vec![
+                I("Union", A::Boolean(BoolOp::Union)),
+                I("Subtract", A::Boolean(BoolOp::Subtract)),
+                I("Intersect", A::Boolean(BoolOp::Intersect)),
+                I("Exclude", A::Boolean(BoolOp::Exclude)),
+                S,
+                I("Flatten", A::Flatten),
+                S,
+                I("Hand-drawn Style", A::ToggleSketch),
+            ],
+        ),
+        (
+            "Text",
+            vec![
+                I("Bold", A::Bold),
+                I("Italic", A::Italic),
+                I("Underline", A::Underline),
+                I("Strikethrough", A::Strikethrough),
+            ],
+        ),
+        (
+            "View",
+            vec![
+                I("Zoom In", A::ZoomIn),
+                I("Zoom Out", A::ZoomOut),
+                I("Zoom to 100%", A::Zoom100),
+                I("Zoom to Fit", A::ZoomFit),
+                I("Zoom to Selection", A::ZoomSelection),
+                S,
+                I("Next Page", A::NextPage),
+                I("Previous Page", A::PrevPage),
+                S,
+                I("Snapping", A::ToggleSnapping),
+                I("Dot Grid", A::ToggleGrid),
+                I("Show/Hide UI", A::ToggleUi),
+                I("Keyboard Shortcuts", A::ToggleHelp),
+            ],
+        ),
+        (
+            "Tools",
+            super::Tool::ALL
+                .iter()
+                .map(|t| I(t.label(), A::Tool(*t)))
+                .collect(),
+        ),
+    ]
+}
+
+/// Human-readable chord text for menus ("⌘⇧E", "Ctrl+Shift+E", "D").
+pub fn chord_text(a: Action) -> String {
+    let Some((k, cmd, shift, alt)) = chord_of(a) else {
+        return String::new();
+    };
+    let mac = cfg!(target_os = "macos");
+    let mut s = String::new();
+    if cmd {
+        s += if mac { "⌘" } else { "Ctrl+" };
+    }
+    if alt {
+        s += if mac { "⌥" } else { "Alt+" };
+    }
+    if shift {
+        s += if mac { "⇧" } else { "Shift+" };
+    }
+    s += &match k {
+        Key::Char(c) => c.to_ascii_uppercase().to_string(),
+        Key::Left => "←".into(),
+        Key::Right => "→".into(),
+        Key::Up => "↑".into(),
+        Key::Down => "↓".into(),
+        other => format!("{other:?}"),
+    };
+    s
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn every_menu_action_has_a_binding_or_is_menu_only() {
+        for (_, items) in super::menus() {
+            fn walk(e: &[super::MenuEntry]) {
+                for x in e {
+                    match x {
+                        super::MenuEntry::Item(label, a) => {
+                            // Delete is bound to the Delete key; everything should be reachable.
+                            assert!(
+                                super::chord_of(*a).is_some()
+                                    || matches!(a, super::Action::ExportSvg),
+                                "{label} has no shortcut"
+                            );
+                        }
+                        super::MenuEntry::Submenu(_, v) => walk(v),
+                        super::MenuEntry::Separator => {}
+                    }
+                }
+            }
+            walk(&items);
+        }
+        assert!(super::help_sections().len() >= 6);
+    }
+
     use super::*;
 
     #[test]

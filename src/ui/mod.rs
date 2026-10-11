@@ -5,6 +5,7 @@ pub mod home;
 pub mod inspector;
 pub mod library;
 pub mod pages;
+pub mod palette;
 
 use crate::editor::shortcuts::{self, Action};
 use crate::editor::{Editor, Tool};
@@ -36,6 +37,23 @@ pub struct UiState {
     pub library: library::LibraryUi,
     /// Left sidebar shows the library instead of the layers.
     pub show_library: bool,
+    pub palette: palette::PaletteUi,
+    /// All panels hidden (⌘\\): just the canvas.
+    pub hide_ui: bool,
+    /// Layer being dragged in the layers panel, and where it would drop.
+    pub layer_drag: Option<(NodeId, Option<LayerDrop>)>,
+    /// Row rects of the last layers-panel frame (for drop targeting).
+    pub layer_rows: Vec<(NodeId, egui::Rect, usize)>,
+}
+
+/// Where a dragged layer lands relative to a row.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum LayerDrop {
+    /// Above the row (in front of it in paint order).
+    Above(NodeId),
+    Below(NodeId),
+    /// Inside a frame or group (on top of its children).
+    Into(NodeId),
 }
 
 pub fn setup_style(ctx: &egui::Context) {
@@ -71,6 +89,27 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
     if let Some(hv) = &mut st.home {
         home::draw(ui, hv, st.native_chrome, st.translucent_sidebar);
         return egui::Rect::NOTHING;
+    }
+    for ev in std::mem::take(&mut ed.ui_events) {
+        use crate::editor::commands::UiEvent;
+        match ev {
+            UiEvent::TogglePalette => st.palette.toggle(),
+            UiEvent::Rename(id) => {
+                if let Some(n) = ed.doc.get(id) {
+                    st.renaming = Some((id, n.name.clone()));
+                    st.show_library = false;
+                    st.hide_ui = false;
+                }
+            }
+            UiEvent::ToggleUi => st.hide_ui = !st.hide_ui,
+            UiEvent::ToggleHelp => st.show_help = !st.show_help,
+            UiEvent::ToggleGrid => st.show_grid_off = !st.show_grid_off,
+        }
+    }
+    if st.hide_ui {
+        let canvas = ui.available_rect_before_wrap();
+        palette::draw(ui.ctx(), ed, st, canvas);
+        return canvas;
     }
     let p = theme::pal(ui);
     let sidebar_fill = if st.translucent_sidebar {
@@ -119,24 +158,34 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
     let canvas = ui.available_rect_before_wrap();
     toolbar(ui.ctx(), ed, canvas);
     status(ui.ctx(), ed, canvas);
+    palette::draw(ui.ctx(), ed, st, canvas);
     if st.show_help {
-        help(ui.ctx(), st);
+        help(ui.ctx(), st, canvas);
     }
     canvas
 }
 
 fn menu_item(ui: &mut Ui, ed: &mut Editor, label: &str, action: Action) {
-    let hint = shortcuts::help_table()
-        .into_iter()
-        .find(|(_, d)| shortcuts::lookup_desc(action).is_some_and(|ad| ad == *d))
-        .map(|(k, _)| k.split(" / ").next().unwrap_or("").to_string())
-        .unwrap_or_default();
     if ui
-        .add(egui::Button::new(label).shortcut_text(hint))
+        .add(egui::Button::new(label).shortcut_text(shortcuts::chord_text(action)))
         .clicked()
     {
         ed.run(action);
         ui.close();
+    }
+}
+
+fn menu_entries(ui: &mut Ui, ed: &mut Editor, entries: &[shortcuts::MenuEntry]) {
+    for e in entries {
+        match e {
+            shortcuts::MenuEntry::Item(label, a) => menu_item(ui, ed, label, *a),
+            shortcuts::MenuEntry::Separator => {
+                ui.separator();
+            }
+            shortcuts::MenuEntry::Submenu(label, items) => {
+                ui.menu_button(*label, |ui| menu_entries(ui, ed, items));
+            }
+        }
     }
 }
 
@@ -225,51 +274,13 @@ fn top_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
 /// egui menus for platforms without a native menu bar (inline, so the toolbar row keeps
 /// the title and zoom controls).
 fn menu_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
-    {
-        ui.menu_button("File", |ui| {
-            menu_item(ui, ed, "New project", Action::New);
-            menu_item(ui, ed, "Import…", Action::Open);
-            menu_item(ui, ed, "Save now", Action::Save);
-            menu_item(ui, ed, "Duplicate project", Action::SaveAs);
-            if ui.button("All projects").clicked() {
-                ed.requests.push(crate::editor::AppRequest::Home);
-                ui.close();
+    for (title, entries) in shortcuts::menus() {
+        ui.menu_button(title, |ui| {
+            menu_entries(ui, ed, &entries);
+            if title == "File" {
+                ui.separator();
+                export_options(ui, st);
             }
-            ui.separator();
-            menu_item(ui, ed, "Export PNG…", Action::ExportPng);
-            menu_item(ui, ed, "Export SVG…", Action::ExportSvg);
-            export_options(ui, st);
-        });
-        ui.menu_button("Edit", |ui| {
-            menu_item(ui, ed, "Undo", Action::Undo);
-            menu_item(ui, ed, "Redo", Action::Redo);
-            ui.separator();
-            menu_item(ui, ed, "Cut", Action::Cut);
-            menu_item(ui, ed, "Copy", Action::Copy);
-            menu_item(ui, ed, "Paste", Action::Paste);
-            menu_item(ui, ed, "Duplicate", Action::Duplicate);
-            menu_item(ui, ed, "Delete", Action::Delete);
-            menu_item(ui, ed, "Select all", Action::SelectAll);
-            ui.separator();
-            menu_item(ui, ed, "Bring forward", Action::Forward);
-            menu_item(ui, ed, "Send backward", Action::Backward);
-            menu_item(ui, ed, "Bring to front", Action::ToFront);
-            menu_item(ui, ed, "Send to back", Action::ToBack);
-            menu_item(ui, ed, "Wrap in frame", Action::WrapInFrame);
-        });
-        ui.menu_button("View", |ui| {
-            menu_item(ui, ed, "Zoom in", Action::ZoomIn);
-            menu_item(ui, ed, "Zoom out", Action::ZoomOut);
-            menu_item(ui, ed, "Zoom to 100%", Action::Zoom100);
-            menu_item(ui, ed, "Zoom to fit", Action::ZoomFit);
-            menu_item(ui, ed, "Zoom to selection", Action::ZoomSelection);
-            ui.separator();
-            ui.checkbox(&mut ed.snapping, "Snapping");
-            let mut grid = !st.show_grid_off;
-            if ui.checkbox(&mut grid, "Dot grid").changed() {
-                st.show_grid_off = !grid;
-            }
-            ui.checkbox(&mut st.show_help, "Keyboard shortcuts");
         });
     }
 }
@@ -349,10 +360,108 @@ fn layers(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
                         .color(theme::pal(ui).secondary),
                 );
             }
+            st.layer_rows.clear();
             for id in roots.iter().rev() {
                 layer_row(ui, ed, st, *id, 0);
             }
+            layer_drag(ui, ed, st);
         });
+}
+
+/// Drag-and-drop reordering in the layers tree: above / below a row, or into a frame/group.
+fn layer_drag(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
+    let Some((dragged, _)) = st.layer_drag else {
+        return;
+    };
+    let Some(pos) = ui.input(|i| i.pointer.interact_pos()) else {
+        return;
+    };
+    let target = st
+        .layer_rows
+        .iter()
+        .find(|(_, r, _)| r.y_range().contains(pos.y))
+        .copied();
+    let drop = target.and_then(|(id, r, _)| {
+        if id == dragged || ed.doc.is_ancestor(dragged, id) {
+            return None;
+        }
+        let n = ed.doc.get(id)?;
+        let t = (pos.y - r.top()) / r.height();
+        Some(if n.is_container() && (0.3..0.7).contains(&t) {
+            LayerDrop::Into(id)
+        } else if t < 0.5 {
+            LayerDrop::Above(id)
+        } else {
+            LayerDrop::Below(id)
+        })
+    });
+    st.layer_drag = Some((dragged, drop));
+    // Indicator.
+    if let (Some(d), Some((_, r, depth))) = (drop, target) {
+        let x0 = r.left() + 4.0 + depth as f32 * 14.0 + 16.0;
+        let stroke = egui::Stroke::new(2.0, theme::accent());
+        match d {
+            LayerDrop::Above(_) => {
+                ui.painter().hline(x0..=r.right(), r.top(), stroke);
+            }
+            LayerDrop::Below(_) => {
+                ui.painter().hline(x0..=r.right(), r.bottom(), stroke);
+            }
+            LayerDrop::Into(_) => {
+                ui.painter()
+                    .rect_stroke(r, 6.0, stroke, egui::StrokeKind::Inside);
+            }
+        }
+    }
+    if ui.input(|i| i.pointer.any_released()) {
+        st.layer_drag = None;
+        if let Some(d) = drop {
+            drop_layer(ed, dragged, d);
+        }
+    }
+}
+
+/// Move a layer in the tree (keeping its position on the canvas).
+pub fn drop_layer(ed: &mut Editor, id: NodeId, d: LayerDrop) {
+    let (parent, index) = match d {
+        LayerDrop::Into(c) => (Some(c), None),
+        LayerDrop::Above(t) | LayerDrop::Below(t) => {
+            let parent = ed.doc.get(t).and_then(|n| n.parent);
+            let list: Vec<NodeId> = ed
+                .doc
+                .children(parent)
+                .iter()
+                .copied()
+                .filter(|x| *x != id)
+                .collect();
+            let i = list.iter().position(|x| *x == t).unwrap_or(0);
+            (
+                parent,
+                Some(if matches!(d, LayerDrop::Above(_)) {
+                    i + 1
+                } else {
+                    i
+                }),
+            )
+        }
+    };
+    if parent.is_some_and(|p| p == id || ed.doc.is_ancestor(id, p)) {
+        return;
+    }
+    ed.edit("Move layer", |tx| {
+        let same = tx.doc().get(id).and_then(|n| n.parent) == parent;
+        if same {
+            if let Some(i) = index {
+                tx.move_to_index(id, i);
+            } else {
+                let len = tx.doc().children(parent).len();
+                tx.move_to_index(id, len);
+            }
+        } else {
+            tx.reparent(id, parent, index);
+        }
+    });
+    ed.selection = vec![id];
 }
 
 fn node_icon(n: &crate::model::Node) -> Icon {
@@ -399,7 +508,12 @@ fn layer_row(ui: &mut Ui, ed: &mut Editor, st: &mut UiState, id: NodeId, depth: 
     let p = theme::pal(ui);
     let selected = ed.selection.contains(&id);
     let width = ui.available_width();
-    let (row, resp) = ui.allocate_exact_size(egui::vec2(width, 24.0), egui::Sense::click());
+    let (row, resp) =
+        ui.allocate_exact_size(egui::vec2(width, 24.0), egui::Sense::click_and_drag());
+    st.layer_rows.push((id, row, depth));
+    if resp.drag_started() && !n.locked {
+        st.layer_drag = Some((id, None));
+    }
     let hovered = ui.rect_contains_pointer(row);
     if selected {
         ui.painter().rect_filled(row, 6.0, theme::accent());
@@ -637,34 +751,66 @@ fn status(ctx: &egui::Context, ed: &Editor, canvas: egui::Rect) {
         });
 }
 
-fn help(ctx: &egui::Context, st: &mut UiState) {
-    let mut open = st.show_help;
-    egui::Window::new("Keyboard shortcuts")
-        .open(&mut open)
-        .resizable(false)
-        .collapsible(false)
+fn help(ctx: &egui::Context, st: &mut UiState, canvas: egui::Rect) {
+    let width = 820.0f32.min(canvas.width() - 40.0);
+    egui::Area::new("help".into())
+        .order(egui::Order::Foreground)
+        .fade_in(false)
+        .pivot(Align2::CENTER_CENTER)
+        .fixed_pos(canvas.center())
         .show(ctx, |ui| {
-            egui::ScrollArea::vertical()
-                .max_height(420.0)
+            let p = theme::pal(ui);
+            egui::Frame::popup(ui.style())
+                .fill(p.popover)
+                .corner_radius(12.0)
+                .inner_margin(16.0)
                 .show(ui, |ui| {
-                    egui::Grid::new("keys").striped(true).show(ui, |ui| {
-                        for (k, d) in shortcuts::help_table() {
-                            ui.label(
-                                RichText::new(k)
-                                    .font(theme::medium(12.0))
-                                    .color(theme::pal(ui).secondary),
-                            );
-                            ui.label(d);
-                            ui.end_row();
-                        }
-                        ui.label(RichText::new("Space+drag").monospace());
-                        ui.label("Pan");
-                        ui.end_row();
-                        ui.label(RichText::new("Wheel / ⌘+Wheel").monospace());
-                        ui.label("Pan / zoom");
-                        ui.end_row();
+                    ui.set_width(width);
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("Keyboard shortcuts").font(theme::semibold(15.0)));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("Done").on_hover_text("Close (Esc)").clicked() {
+                                st.show_help = false;
+                            }
+                        });
                     });
+                    ui.add_space(6.0);
+                    let sections = shortcuts::help_sections();
+                    egui::ScrollArea::vertical()
+                        .max_height((canvas.height() - 160.0).max(200.0))
+                        .show(ui, |ui| {
+                            ui.columns(3, |cols| {
+                                // Balance columns by row count.
+                                let total: usize = sections.iter().map(|(_, r)| r.len() + 2).sum();
+                                let mut acc = 0;
+                                for (i, (title, rows)) in sections.iter().enumerate() {
+                                    let col = (acc * 3 / total.max(1)).min(2);
+                                    acc += rows.len() + 2;
+                                    let ui = &mut cols[col];
+                                    ui.label(title_text(*title));
+                                    egui::Grid::new(("keys", i)).num_columns(2).spacing([10.0, 3.0]).show(ui, |ui| {
+                                        for (k, d) in rows {
+                                            ui.label(
+                                                RichText::new(k)
+                                                    .font(theme::medium(11.5))
+                                                    .color(p.secondary),
+                                            );
+                                            ui.label(RichText::new(*d).size(12.0));
+                                            ui.end_row();
+                                        }
+                                    });
+                                    ui.add_space(10.0);
+                                }
+                            });
+                        });
+                    ui.label(
+                        RichText::new("Space-drag pans · wheel pans · ⌘/Ctrl+wheel or pinch zooms · ⌥-drag duplicates · hold ⌥ to measure")
+                            .size(theme::SECONDARY)
+                            .color(p.secondary),
+                    );
                 });
         });
-    st.show_help = open;
+    if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        st.show_help = false;
+    }
 }

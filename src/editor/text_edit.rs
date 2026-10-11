@@ -159,8 +159,8 @@ impl Editor {
                 };
                 self.move_caret(to);
             }
-            Key::Home => self.move_caret(0),
-            Key::End => self.move_caret(len),
+            Key::Home | Key::PageUp => self.move_caret(0),
+            Key::End | Key::PageDown => self.move_caret(len),
             Key::Up | Key::Down => {
                 if let Some(to) = self.vertical_caret(*key == Key::Down) {
                     self.move_caret(to);

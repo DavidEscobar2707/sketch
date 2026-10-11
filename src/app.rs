@@ -646,6 +646,8 @@ fn map_key(k: &WKey) -> Option<Key> {
         WKey::Named(NamedKey::ArrowDown) => Key::Down,
         WKey::Named(NamedKey::Home) => Key::Home,
         WKey::Named(NamedKey::End) => Key::End,
+        WKey::Named(NamedKey::PageUp) => Key::PageUp,
+        WKey::Named(NamedKey::PageDown) => Key::PageDown,
         WKey::Character(s) => Key::Char(s.chars().next()?),
         _ => return None,
     })

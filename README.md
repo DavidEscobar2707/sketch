@@ -127,28 +127,28 @@ select, Shift-click to add, double-click to rename, and use 👁 / 🔒 to hide 
 
 ### Keyboard shortcuts
 
-⌘ on macOS, Ctrl on Linux and Windows. Press `?` in the app for the full list.
+⌘ on macOS, Ctrl on Linux and Windows. Press `?` or ⌘/ in the app for the full grouped list
+(100+ bindings), or ⌘K to search every command.
 
 | Keys | Action | Keys | Action |
 |---|---|---|---|
-| V | Select | ⌘Z / ⌘⇧Z / ⌘Y | Undo / redo |
-| H, or hold Space | Hand (pan) | ⌘C / ⌘X / ⌘V | Copy / cut / paste |
-| F or A | Frame | ⌘D | Duplicate |
-| R | Rectangle | ⌘A | Select all (in scope) |
-| O | Ellipse | Delete / Backspace | Delete |
-| L | Line | ⌘] / ⌘[ | Forward / backward |
-| T | Text | ⌘⇧] / ⌘⇧[ | To front / to back |
-| P or B | Pencil (freehand) | ⌘⌥G | Wrap selection in frame |
-| E | Eraser | ⌘⇧H / ⌘⇧L | Show/hide, lock/unlock |
-| Enter | Edit text / select children | ←↑→↓ (⇧ = 10px) | Nudge |
-| Esc | Cancel / select parent / deselect | ⌘' | Toggle snapping |
-| ⌘= / ⌘- / ⌘0 | Zoom in / out / 100% | ⌘N / ⌘O | New / open |
-| ⇧1 / ⇧2 | Zoom to fit / selection | ⌘S / ⌘⇧S | Save / save as |
-| Wheel / ⌘+wheel / pinch | Pan / zoom | ⌘⇧E / ⌘⌥E | Export PNG / SVG |
-
-These match Paper wherever Paper's shortcuts are visible: the desktop menu defines ⌘N, ⌘Z,
-⌘⇧Z, ⌘X/C/V, ⌘A, and canvas zoom on ⌘+, ⌘-, ⌘0. Paper's tool hotkeys live in its web client,
-so the tool letters follow the shared design-tool convention.
+| V / 1 | Select | ⌘K | Command palette |
+| H, or hold Space | Hand (pan) | ⌘Z / ⌘⇧Z | Undo / redo |
+| F or A | Frame | ⌘G / ⌘⇧G | Group / ungroup |
+| R / 2, O / 4, D / 3 | Rectangle, ellipse, diamond | ⌘⌥G | Frame selection |
+| ⇧Y, ⇧S | Polygon, star | ⌘⌥K / ⌘⌥B | Create component / detach |
+| L / 6, ⇧L / 5 | Line, arrow | ⇧A / ⌥⇧A | Add / remove auto layout |
+| P, ⇧P / 7 | Pen, pencil | ⌥A ⌥H ⌥D / ⌥W ⌥V ⌥S | Align left/center/right, top/middle/bottom |
+| T / 8, S | Text, sticky note | ⌥⇧H / ⌥⇧V | Distribute spacing |
+| K | Laser pointer | ⌥⇧U S I E | Union, subtract, intersect, exclude |
+| E / 0 | Eraser | ⌘E | Flatten |
+| 9, ⌘⇧K | Place image | ⌘B / ⌘I / ⌘U / ⌘⇧X | Bold, italic, underline, strikethrough |
+| Enter / ⇧Enter | Edit (text, path) / select parent | ⌘⌥H | Hand-drawn style |
+| Tab / ⇧Tab | Next / previous sibling | ⇧H / ⇧V | Flip |
+| ⌥-drag | Duplicate while dragging | ⌘⌥C / ⌘⌥V | Copy / paste properties |
+| ⌥ hover | Measure distances | ⌘R | Rename |
+| ⌘= / ⌘- / ⇧0 | Zoom in / out / 100% | ⇧1 / ⇧2 | Zoom to fit / selection |
+| PageUp / PageDown | Previous / next page | ⌘\\ | Show / hide UI |
 
 ## Feature parity: Paper / Figma / Excalidraw vs paper-rs
 
@@ -181,7 +181,7 @@ Known gaps), ⏳ planned in a later milestone, ❌ not planned.
 | Hand-drawn (rough) style per element | – | – | ✓ | ✅ rough.js 4.6.4 port, verified against rough.js output; sloppiness, fill styles |
 | Bound arrows, elbow arrows, quick shapes, sticky notes | – | (FigJam) | ✓ | ✅ Orbit binding that follows shapes, straight/curved/elbow, 5 heads, diamond, quick-connect, stickies |
 | Laser pointer, shape library | – | (FigJam) | ✓ | ✅ Fading laser trail; shared library with starter items |
-| Inspector, layers drag-reorder, command palette (⌘K) | ✓ | ✓ | ✓ | ⚠️ inspector done; ⏳ M5 for the rest |
+| Inspector, layers drag-reorder, command palette (⌘K) | ✓ | ✓ | ✓ | ✅ Sectioned inspector, tree drag above/below/into, fuzzy palette over actions, pages, layers, library |
 | Export PNG / SVG / PDF of selection, frame, page | ✓ | ✓ | ✓ (PNG/SVG) | ⚠️ PNG/SVG done; ⏳ PDF in M6 |
 | Import .excalidraw / SVG, copy-paste across projects | – | ✓ (SVG) | ✓ | ⚠️ cross-project paste done; ⏳ M6 |
 | Freehand ink with pressure | – | (pencil) | ✓ | ✅ Smoothing, pressure, eraser |
