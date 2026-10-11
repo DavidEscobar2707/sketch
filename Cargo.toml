@@ -14,6 +14,10 @@ path = "src/lib.rs"
 name = "paper-rs"
 path = "src/main.rs"
 
+[[bin]]
+name = "paper-rs-mcp"
+path = "src/bin/paper-rs-mcp.rs"
+
 [dependencies]
 egui = "0.36"
 egui-wgpu = "0.36"
@@ -36,6 +40,10 @@ i_overlay = "9.0.1"
 miniz_oxide = "0.9.1"
 usvg = "0.48"
 arboard = { version = "3.6.1", features = ["image-data"] }
+rmcp = { version = "3.5.1", default-features = false, features = ["server", "base64", "transport-streamable-http-server", "transport-io", "client", "transport-streamable-http-client-reqwest"] }
+tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "macros", "time", "io-std"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
+tokio-util = "0.7"
 
 [profile.release]
 debug = false
@@ -45,6 +53,8 @@ opt-level = 2
 
 [dev-dependencies]
 resvg = "0.48"
+rmcp = { version = "3.5.1", default-features = false, features = ["transport-child-process"] }
+reqwest = { version = "0.13", default-features = false }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 muda = { version = "0.21", default-features = false }

@@ -140,7 +140,28 @@ impl Editor {
 
     /// Add an empty page after the active one and switch to it.
     pub fn add_page(&mut self) -> usize {
-        let name = self.unique_page_name(&format!("Page {}", self.pages.len() + 1));
+        let at = self.active_page + 1;
+        self.insert_empty_page(at, None);
+        self.switch_page(at);
+        self.status = format!("Added {}", self.pages[at].name);
+        at
+    }
+
+    /// Append an empty page without leaving the current one (agents adding pages).
+    pub fn add_page_in_background(&mut self, name: Option<&str>) -> usize {
+        let at = self.pages.len();
+        self.insert_empty_page(at, name);
+        self.revision += 1;
+        at
+    }
+
+    fn insert_empty_page(&mut self, at: usize, name: Option<&str>) {
+        let base = name
+            .map(str::trim)
+            .filter(|n| !n.is_empty())
+            .map(String::from)
+            .unwrap_or_else(|| format!("Page {}", self.pages.len() + 1));
+        let name = self.unique_page_name(&base);
         let mut slot = PageSlot::new(&name);
         slot.stash = Some(Box::new(PageStash {
             doc: Document {
@@ -154,15 +175,11 @@ impl Editor {
         }));
         // Never saved: force the first autosave.
         slot.saved_gen = u64::MAX;
-        let at = self.active_page + 1;
         self.pages.insert(at, slot);
         if self.active_page >= at {
             self.active_page += 1;
         }
         self.meta_dirty = true;
-        self.switch_page(at);
-        self.status = format!("Added {name}");
-        at
     }
 
     pub fn duplicate_page(&mut self, i: usize) -> usize {
@@ -292,6 +309,35 @@ impl Editor {
             },
             camera,
         }
+    }
+
+    /// Run `f` with page `i` in the active slot (its document, undo history and selection)
+    /// without switching the page the user sees. Edits made by `f` land in page `i`'s own
+    /// history; the user's view, camera and dirty marker are left alone.
+    pub fn with_page<R>(&mut self, i: usize, f: impl FnOnce(&mut Editor) -> R) -> R {
+        if i == self.active_page || i >= self.pages.len() {
+            return f(self);
+        }
+        self.commit();
+        let mut s = self.pages[i]
+            .stash
+            .take()
+            .expect("inactive page has a stash");
+        let swap = |ed: &mut Editor, s: &mut PageStash| {
+            std::mem::swap(&mut ed.doc, &mut s.doc);
+            std::mem::swap(&mut ed.history, &mut s.history);
+            std::mem::swap(&mut ed.selection, &mut s.selection);
+        };
+        let saved_marker = self.saved_marker;
+        swap(self, &mut s);
+        let r = f(self);
+        self.commit();
+        swap(self, &mut s);
+        self.saved_marker = saved_marker;
+        self.pages[i].stash = Some(s);
+        self.revision += 1;
+        self.doc_stamp = super::next_stamp();
+        r
     }
 
     /// The document of page `i` (active or parked).

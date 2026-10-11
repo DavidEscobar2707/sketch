@@ -13,6 +13,7 @@ pub mod layout;
 pub mod library;
 #[cfg(target_os = "macos")]
 pub mod macos;
+pub mod mcp;
 pub mod model;
 pub mod project;
 pub mod render;

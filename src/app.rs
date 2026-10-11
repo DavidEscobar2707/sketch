@@ -44,6 +44,11 @@ pub struct App {
     next_repaint: Option<Instant>,
     #[cfg(target_os = "macos")]
     menu: Option<crate::macos::NativeMenu>,
+    /// Tool calls from the MCP server, and the server itself (stops when dropped).
+    mcp: Option<(
+        std::sync::mpsc::Receiver<crate::mcp::Call>,
+        crate::mcp::server::Running,
+    )>,
 }
 
 /// Events delivered to the winit loop from other sources.
@@ -51,6 +56,8 @@ pub struct App {
 pub enum UserEvent {
     #[cfg(target_os = "macos")]
     Menu(muda::MenuId),
+    /// MCP tool calls are waiting in `App::mcp`.
+    Mcp,
 }
 
 /// What to show at startup.
@@ -82,6 +89,7 @@ impl App {
             next_repaint: None,
             #[cfg(target_os = "macos")]
             menu: None,
+            mcp: None,
         };
         app.st.library.library = library;
         app.ed.clipboard_io = crate::io::clipboard::System::new()
@@ -1186,6 +1194,7 @@ impl ApplicationHandler<UserEvent> for App {
                     self.menu_command(_event_loop, cmd);
                 }
             }
+            UserEvent::Mcp => self.run_mcp_calls(),
         }
     }
 
@@ -1294,6 +1303,104 @@ fn physical_char(c: winit::keyboard::KeyCode) -> Option<char> {
     })
 }
 
+impl App {
+    /// Run the MCP tool calls that arrived since the last wake-up, then repaint.
+    fn run_mcp_calls(&mut self) {
+        let calls: Vec<crate::mcp::Call> = match &self.mcp {
+            Some((rx, _)) => rx.try_iter().collect(),
+            None => return,
+        };
+        if calls.is_empty() {
+            return;
+        }
+        for c in calls {
+            let r = crate::mcp::exec::call(self, &c.name, &c.args);
+            if let Err(e) = &r {
+                log::info!("mcp {}: {e}", c.name);
+            }
+            let _ = c.reply.send(r);
+        }
+        self.st.project_name = self.session.project_name();
+        self.ed.revision += 1;
+        if let Some(g) = &self.gfx {
+            g.window.request_redraw();
+        }
+    }
+}
+
+impl crate::mcp::exec::Host for App {
+    fn editor(&mut self) -> &mut Editor {
+        &mut self.ed
+    }
+    fn store(&self) -> &Store {
+        &self.session.store
+    }
+    fn project(&self) -> Option<&crate::project::Project> {
+        self.session
+            .project
+            .as_ref()
+            .filter(|_| self.st.home.is_none())
+    }
+    fn canvas_open(&self) -> bool {
+        self.st.home.is_none()
+    }
+    fn open_project(&mut self, dir: &std::path::Path) -> Result<(), String> {
+        // No modal dialogs here: the agent gets the error instead.
+        if self.session.project.is_some() {
+            self.session
+                .save_all(&mut self.ed)
+                .map_err(|e| format!("could not save the open project: {e}"))?;
+        }
+        self.session
+            .open(&mut self.ed, dir)
+            .map_err(|e| format!("could not open {}: {e}", dir.display()))?;
+        self.st.home = None;
+        self.st.project_name = self.session.project_name();
+        self.st.save_state.clear();
+        self.ed.status.clear();
+        Ok(())
+    }
+    fn save(&mut self) -> Result<(), String> {
+        if self.session.project.is_some() {
+            self.session
+                .save_all(&mut self.ed)
+                .map_err(|e| e.to_string())?;
+            self.st.save_state = "Saved".into();
+        }
+        Ok(())
+    }
+    fn gpu(&mut self) -> Option<Headless> {
+        self.offscreen().or_else(|| Headless::new().ok())
+    }
+}
+
+/// Start the MCP server unless `PAPER_RS_MCP=0`. Calls wake the event loop through `proxy`.
+fn start_mcp(
+    proxy: winit::event_loop::EventLoopProxy<UserEvent>,
+) -> Option<(
+    std::sync::mpsc::Receiver<crate::mcp::Call>,
+    crate::mcp::server::Running,
+)> {
+    if std::env::var("PAPER_RS_MCP").is_ok_and(|v| matches!(v.as_str(), "0" | "off" | "false")) {
+        return None;
+    }
+    let (tx, rx) = std::sync::mpsc::channel::<crate::mcp::Call>();
+    let tx = std::sync::Mutex::new(tx);
+    let dispatch: crate::mcp::server::Dispatch = std::sync::Arc::new(move |call| {
+        tx.lock().unwrap().send(call).is_ok() && proxy.send_event(UserEvent::Mcp).is_ok()
+    });
+    match crate::mcp::server::spawn(crate::mcp::port(), dispatch) {
+        Ok(running) => {
+            log::info!("MCP server listening on {}", running.url());
+            Some((rx, running))
+        }
+        Err(e) => {
+            log::warn!("MCP server not started: {e}");
+            None
+        }
+    }
+}
+
 pub fn run(start: Start) -> Result<(), String> {
     let store = Store::open(Store::default_root())
         .map_err(|e| format!("cannot create the projects folder: {e}"))?;
@@ -1309,5 +1416,6 @@ pub fn run(start: Start) -> Result<(), String> {
         }));
     }
     let mut app = App::new(start, store);
+    app.mcp = start_mcp(event_loop.create_proxy());
     event_loop.run_app(&mut app).map_err(|e| e.to_string())
 }
