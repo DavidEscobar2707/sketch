@@ -10,7 +10,9 @@ pub mod io;
 #[cfg(target_os = "macos")]
 pub mod macos;
 pub mod model;
+pub mod project;
 pub mod render;
+pub mod session;
 pub mod text;
 pub mod theme;
 pub mod ui;

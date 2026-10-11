@@ -306,6 +306,11 @@ pub enum Icon {
     Minus,
     Sidebar,
     Export,
+    Grid,
+    Trash,
+    More,
+    Page,
+    Restore,
 }
 
 pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color32) {
@@ -468,6 +473,49 @@ pub fn paint_icon(painter: &egui::Painter, rect: Rect, icon: Icon, color: Color3
                 egui::StrokeKind::Middle,
             );
             line(&[pt(6.0, 3.0), pt(6.0, 13.0)]);
+        }
+        Icon::Grid => {
+            for (x, y) in [(2.5, 2.5), (9.0, 2.5), (2.5, 9.0), (9.0, 9.0)] {
+                painter.rect_stroke(
+                    Rect::from_min_max(pt(x, y), pt(x + 4.5, y + 4.5)),
+                    1.0 * u,
+                    st,
+                    egui::StrokeKind::Middle,
+                );
+            }
+        }
+        Icon::Trash => {
+            line(&[pt(2.5, 4.0), pt(13.5, 4.0)]);
+            line(&[pt(6.0, 4.0), pt(6.0, 2.3), pt(10.0, 2.3), pt(10.0, 4.0)]);
+            closed(&[pt(3.8, 4.0), pt(12.2, 4.0), pt(11.4, 14.0), pt(4.6, 14.0)]);
+            line(&[pt(6.6, 6.5), pt(6.9, 11.8)]);
+            line(&[pt(9.4, 6.5), pt(9.1, 11.8)]);
+        }
+        Icon::More => {
+            for x in [3.5, 8.0, 12.5] {
+                painter.circle_filled(pt(x, 8.0), 1.1 * u, color);
+            }
+        }
+        Icon::Page => {
+            closed(&[
+                pt(3.5, 1.8),
+                pt(9.5, 1.8),
+                pt(12.5, 4.8),
+                pt(12.5, 14.2),
+                pt(3.5, 14.2),
+            ]);
+            line(&[pt(9.5, 1.8), pt(9.5, 4.8), pt(12.5, 4.8)]);
+        }
+        Icon::Restore => {
+            let mut a = arc(c, 5.5 * u, -2.6, 2.2, 14);
+            a.reverse();
+            line(&a);
+            let start = c + 5.5 * u * Vec2::angled(-2.6);
+            line(&[
+                start + vec2(-0.5 * u, -3.0 * u),
+                start,
+                start + vec2(3.0 * u, 0.3 * u),
+            ]);
         }
         Icon::Export => {
             line(&[

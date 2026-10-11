@@ -3,9 +3,13 @@
 use crate::editor::{AppRequest, Button, Editor, InputEvent, Key, Modifiers};
 use crate::geom::{V2, v2};
 use crate::io::{file, png, svg};
-use crate::model::{Color, Document};
+use crate::model::Color;
+use crate::project::Store;
 use crate::render::frame::{self, Painter};
+use crate::render::gpu::Headless;
+use crate::session::Session;
 use crate::theme;
+use crate::ui::home::HomeAction;
 use crate::ui::{self, UiState};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -24,11 +28,13 @@ struct Gfx {
     config: wgpu::SurfaceConfiguration,
     painter: Painter,
     egui: egui_winit::State,
+    adapter_info: wgpu::AdapterInfo,
 }
 
 pub struct App {
     gfx: Option<Gfx>,
     pub ed: Editor,
+    session: Session,
     st: UiState,
     ctx: egui::Context,
     start: Instant,
@@ -48,14 +54,25 @@ pub enum UserEvent {
     Menu(muda::MenuId),
 }
 
+/// What to show at startup.
+pub enum Start {
+    /// The projects home screen.
+    Home,
+    /// Open this project folder.
+    Project(PathBuf),
+    /// A scratch editor that is not backed by a project (demo, tests).
+    Scratch(Box<Editor>),
+}
+
 impl App {
-    pub fn new(ed: Editor) -> App {
+    pub fn new(start: Start, store: Store) -> App {
         let ctx = egui::Context::default();
         theme::set_accent(theme::system_accent());
         ui::setup_style(&ctx);
-        App {
+        let mut app = App {
             gfx: None,
-            ed,
+            ed: Editor::default(),
+            session: Session::new(store),
             st: UiState::default(),
             ctx,
             start: Instant::now(),
@@ -65,7 +82,20 @@ impl App {
             next_repaint: None,
             #[cfg(target_os = "macos")]
             menu: None,
+        };
+        match start {
+            Start::Home => app.show_home(),
+            Start::Project(dir) => {
+                if let Err(e) = app.session.open(&mut app.ed, &dir) {
+                    app.error(format!("Could not open {}: {e}", dir.display()));
+                    app.show_home();
+                } else {
+                    app.st.project_name = app.session.project_name();
+                }
+            }
+            Start::Scratch(ed) => app.ed = *ed,
         }
+        app
     }
 
     fn now(&self) -> f64 {
@@ -80,8 +110,9 @@ impl App {
         self.canvas.contains(egui::pos2(p.x as f32, p.y as f32)) && !self.ctx.is_pointer_over_egui()
     }
 
+    /// Before leaving a scratch (project-less) document. Projects autosave, so they never ask.
     fn confirm_discard(&mut self) -> bool {
-        if !self.ed.is_dirty() {
+        if self.session.project.is_some() || self.st.home.is_some() || !self.ed.is_dirty() {
             return true;
         }
         let r = rfd::MessageDialog::new()
@@ -106,18 +137,19 @@ impl App {
             .show();
     }
 
-    fn save(&mut self, save_as: bool) -> bool {
-        let path = match (&self.ed.file_path, save_as) {
-            (Some(p), false) => p.clone(),
-            _ => match rfd::FileDialog::new()
-                .add_filter("paper-rs document", &[file::EXTENSION])
-                .set_file_name(format!("{}.{}", self.ed.doc.name, file::EXTENSION))
-                .save_file()
-            {
-                Some(p) => with_ext(p, file::EXTENSION),
-                None => return false,
-            },
+    /// Save a scratch document to a legacy file (only used when no project is open).
+    fn save(&mut self, _save_as: bool) -> bool {
+        if self.session.project.is_some() {
+            return self.save_project(true);
+        }
+        let Some(p) = rfd::FileDialog::new()
+            .add_filter("paper-rs document", &[file::EXTENSION])
+            .set_file_name(format!("{}.{}", self.ed.doc.name, file::EXTENSION))
+            .save_file()
+        else {
+            return false;
         };
+        let path = with_ext(p, file::EXTENSION);
         match file::save(&path, &self.ed.doc, Some(&self.ed.camera)) {
             Ok(()) => {
                 self.ed.mark_saved();
@@ -132,6 +164,168 @@ impl App {
         }
     }
 
+    /// A GPU handle for offscreen work (thumbnails, PNG export) on the window's device.
+    fn offscreen(&self) -> Option<Headless> {
+        let g = self.gfx.as_ref()?;
+        Some(Headless {
+            device: g.device.clone(),
+            queue: g.queue.clone(),
+            adapter_info: g.adapter_info.clone(),
+        })
+    }
+
+    /// Save the open project; `full` also writes the camera and refreshes the thumbnail.
+    fn save_project(&mut self, full: bool) -> bool {
+        self.st.save_state = String::new();
+        let r = if full {
+            self.session.save_all(&mut self.ed)
+        } else {
+            self.session.save(&mut self.ed).map(|_| ())
+        };
+        if let Err(e) = r {
+            self.st.save_state = "Not saved".into();
+            self.session.defer();
+            self.error(format!("Could not save project: {e}"));
+            return false;
+        }
+        self.st.save_state = "Saved".into();
+        if self.session.thumbnail_due(Instant::now(), full)
+            && let Some(gpu) = self.offscreen()
+            && let Err(e) = self.session.write_thumbnail(&gpu, &self.ed)
+        {
+            log::warn!("thumbnail: {e}");
+        }
+        true
+    }
+
+    /// Autosave when due. Called after every frame and on timer wake-ups.
+    fn tick_autosave(&mut self) {
+        if self.session.autosave_due(&self.ed, Instant::now()) {
+            self.save_project(false);
+        }
+    }
+
+    fn show_home(&mut self) {
+        let mut hv = self.st.home.take().unwrap_or_default();
+        hv.refresh(&self.session.store, crate::project::now_ms());
+        self.st.home = Some(hv);
+        self.st.project_name.clear();
+        self.st.save_state.clear();
+    }
+
+    fn open_project(&mut self, dir: &std::path::Path) {
+        if self.session.project.is_some() {
+            self.save_project(true);
+        }
+        match self.session.open(&mut self.ed, dir) {
+            Ok(()) => {
+                self.st.home = None;
+                self.st.project_name = self.session.project_name();
+                self.st.save_state.clear();
+                self.ed.status.clear();
+            }
+            Err(e) => self.error(format!("Could not open {}: {e}", dir.display())),
+        }
+    }
+
+    fn new_project(&mut self) {
+        if self.session.project.is_some() {
+            self.save_project(true);
+        }
+        match self.session.create(&mut self.ed, "Untitled") {
+            Ok(()) => {
+                self.st.home = None;
+                self.st.project_name = self.session.project_name();
+                self.st.save_state.clear();
+            }
+            Err(e) => self.error(format!("Could not create a project: {e}")),
+        }
+    }
+
+    fn go_home(&mut self) {
+        if self.session.project.is_some() {
+            self.save_project(true);
+            if let Err(e) = self.session.close(&mut self.ed) {
+                self.error(format!("Could not save project: {e}"));
+            }
+        } else if !self.confirm_discard() {
+            return;
+        }
+        self.show_home();
+    }
+
+    /// Import a file into a new project and open it.
+    fn import_dialog(&mut self) {
+        let Some(p) = rfd::FileDialog::new()
+            .add_filter("Supported files", &[file::EXTENSION])
+            .add_filter("paper-rs 0.1 document", &[file::EXTENSION])
+            .pick_file()
+        else {
+            return;
+        };
+        self.import_file(&p);
+    }
+
+    fn import_file(&mut self, p: &std::path::Path) {
+        match crate::io::import::import_as_pages(p) {
+            Ok((name, pages)) => match self.session.store.create_with_pages(&name, pages) {
+                Ok(proj) => {
+                    let dir = proj.dir.clone();
+                    self.open_project(&dir);
+                    self.ed.status = format!("Imported {}", p.display());
+                }
+                Err(e) => self.error(format!("Could not create a project: {e}")),
+            },
+            Err(e) => self.error(format!("Could not import {}: {e}", p.display())),
+        }
+    }
+
+    fn handle_home_actions(&mut self) {
+        let Some(hv) = &mut self.st.home else { return };
+        let actions = std::mem::take(&mut hv.actions);
+        if actions.is_empty() {
+            return;
+        }
+        let store = self.session.store.clone();
+        for a in actions {
+            let r: Result<(), String> = match a {
+                HomeAction::New => {
+                    self.new_project();
+                    Ok(())
+                }
+                HomeAction::Import => {
+                    self.import_dialog();
+                    Ok(())
+                }
+                HomeAction::Open(dir) => {
+                    self.open_project(&dir);
+                    Ok(())
+                }
+                HomeAction::Rename(dir, name) => store
+                    .rename(&dir, &name)
+                    .map(|_| ())
+                    .map_err(|e| e.to_string()),
+                HomeAction::Duplicate(dir) => {
+                    store.duplicate(&dir).map(|_| ()).map_err(|e| e.to_string())
+                }
+                HomeAction::Trash(dir) => store.trash(&dir).map(|_| ()).map_err(|e| e.to_string()),
+                HomeAction::Restore(dir) => {
+                    store.restore(&dir).map(|_| ()).map_err(|e| e.to_string())
+                }
+                HomeAction::DeleteForever(dir) => {
+                    store.delete_forever(&dir).map_err(|e| e.to_string())
+                }
+                HomeAction::EmptyTrash => store.empty_trash().map_err(|e| e.to_string()),
+            };
+            if let Err(e) = r {
+                self.error(e);
+            }
+        }
+        if self.st.home.is_some() {
+            self.show_home();
+        }
+    }
+
     fn export_roots(&self) -> Option<Vec<crate::model::NodeId>> {
         let sel = self.ed.top_selection();
         (!sel.is_empty()).then_some(sel)
@@ -140,34 +334,22 @@ impl App {
     fn handle_requests(&mut self) {
         for req in std::mem::take(&mut self.ed.requests) {
             match req {
-                AppRequest::New => {
-                    if self.confirm_discard() {
-                        self.ed.load(Document::default(), None, None);
-                    }
-                }
-                AppRequest::Open => {
-                    if !self.confirm_discard() {
-                        continue;
-                    }
-                    let Some(p) = rfd::FileDialog::new()
-                        .add_filter("paper-rs document", &[file::EXTENSION])
-                        .pick_file()
-                    else {
-                        continue;
-                    };
-                    match file::load(&p) {
-                        Ok((doc, cam)) => {
-                            self.ed.load(doc, cam, Some(p.clone()));
-                            self.ed.status = format!("Opened {}", p.display());
-                        }
-                        Err(e) => self.error(format!("Could not open {}: {e}", p.display())),
-                    }
-                }
+                AppRequest::Home => self.go_home(),
+                AppRequest::New => self.new_project(),
+                AppRequest::Open => self.import_dialog(),
                 AppRequest::Save => {
                     self.save(false);
                 }
                 AppRequest::SaveAs => {
-                    self.save(true);
+                    if let Some(dir) = self.session.project.as_ref().map(|p| p.dir.clone()) {
+                        self.save_project(true);
+                        match self.session.store.duplicate(&dir) {
+                            Ok(copy) => self.open_project(&copy),
+                            Err(e) => self.error(format!("Could not duplicate: {e}")),
+                        }
+                    } else {
+                        self.save(true);
+                    }
                 }
                 AppRequest::ExportPng => {
                     let Some(p) = rfd::FileDialog::new()
@@ -271,16 +453,30 @@ impl App {
         g.window.pre_present_notify();
         g.queue.present(frame);
 
-        let title = format!(
-            "{}{} — paper-rs",
-            self.ed.doc.name,
-            if self.ed.is_dirty() { " •" } else { "" }
-        );
+        let title = if self.st.home.is_some() {
+            "paper-rs".to_string()
+        } else if self.session.project.is_some() {
+            format!(
+                "{} — {} — paper-rs",
+                self.st.project_name,
+                self.ed.page_name()
+            )
+        } else {
+            format!(
+                "{}{} — paper-rs",
+                self.ed.doc.name,
+                if self.ed.is_dirty() { " •" } else { "" }
+            )
+        };
         if title != self.title {
             g.window.set_title(&title);
             self.title = title;
         }
+        let pending = !self.ed.requests.is_empty()
+            || self.st.home.as_ref().is_some_and(|h| !h.actions.is_empty());
         self.handle_requests();
+        self.handle_home_actions();
+        self.tick_autosave();
         self.sync_menu();
         // Repaint only when egui wants it: immediately (an animation is running or state just
         // changed), after a delay (tooltip, caret blink), or never (idle; input wakes us).
@@ -291,7 +487,7 @@ impl App {
                 self.ctx.repaint_causes()
             );
         }
-        if repaint_delay.is_zero() || !self.ed.requests.is_empty() {
+        if repaint_delay.is_zero() || pending || !self.ed.requests.is_empty() {
             g.window.request_redraw();
             self.next_repaint = None;
         } else if repaint_delay < Duration::from_secs(3600) {
@@ -435,7 +631,8 @@ impl ApplicationHandler<UserEvent> for App {
             ..Default::default()
         }))
         .expect("no compatible GPU adapter");
-        log::info!("adapter: {:?}", adapter.get_info());
+        let adapter_info = adapter.get_info();
+        log::info!("adapter: {adapter_info:?}");
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("paper-rs"),
             required_limits: wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits()),
@@ -483,6 +680,7 @@ impl ApplicationHandler<UserEvent> for App {
             config,
             painter,
             egui,
+            adapter_info,
         });
     }
 
@@ -497,6 +695,9 @@ impl ApplicationHandler<UserEvent> for App {
         let now = self.now();
         match event {
             WindowEvent::CloseRequested => {
+                if self.session.project.is_some() {
+                    self.save_project(true);
+                }
                 if self.confirm_discard() {
                     event_loop.exit();
                 }
@@ -742,9 +943,26 @@ impl ApplicationHandler<UserEvent> for App {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        match self.next_repaint {
+        // Autosave runs off a timer so it also fires while the window sits idle.
+        if self
+            .session
+            .next_deadline()
+            .is_some_and(|d| Instant::now() >= d)
+        {
+            self.tick_autosave();
+            if let Some(g) = &self.gfx {
+                g.window.request_redraw();
+            }
+        }
+        let wake = match (self.next_repaint, self.session.next_deadline()) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+        match wake {
             Some(t) if Instant::now() >= t => {
-                self.next_repaint = None;
+                if self.next_repaint.is_some_and(|r| r <= t) {
+                    self.next_repaint = None;
+                }
                 if let Some(g) = &self.gfx {
                     g.window.request_redraw();
                 }
@@ -791,7 +1009,9 @@ fn physical_char(c: winit::keyboard::KeyCode) -> Option<char> {
     })
 }
 
-pub fn run(ed: Editor) -> Result<(), String> {
+pub fn run(start: Start) -> Result<(), String> {
+    let store = Store::open(Store::default_root())
+        .map_err(|e| format!("cannot create the projects folder: {e}"))?;
     let event_loop = EventLoop::<UserEvent>::with_user_event()
         .build()
         .map_err(|e| format!("cannot open a window: {e}"))?;
@@ -803,6 +1023,6 @@ pub fn run(ed: Editor) -> Result<(), String> {
             let _ = proxy.send_event(UserEvent::Menu(e.id));
         }));
     }
-    let mut app = App::new(ed);
+    let mut app = App::new(start, store);
     event_loop.run_app(&mut app).map_err(|e| e.to_string())
 }

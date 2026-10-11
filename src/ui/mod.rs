@@ -1,4 +1,7 @@
-//! egui chrome: menu bar, layers panel, design (properties) panel, floating toolbar.
+//! egui chrome: menu bar, layers panel, design (properties) panel, floating toolbar, and the
+//! projects home screen.
+
+pub mod home;
 
 use crate::editor::shortcuts::{self, Action};
 use crate::editor::{Editor, Tool};
@@ -20,6 +23,12 @@ pub struct UiState {
     pub native_chrome: bool,
     /// The sidebar sits over an NSVisualEffectView, so paint it transparent.
     pub translucent_sidebar: bool,
+    /// When set, the projects home screen is shown instead of the editor.
+    pub home: Option<home::HomeView>,
+    /// Name of the open project (shown in the toolbar).
+    pub project_name: String,
+    /// Autosave state for the toolbar subtitle, e.g. "Saved" or "Saving…".
+    pub save_state: String,
 }
 
 pub fn setup_style(ctx: &egui::Context) {
@@ -51,6 +60,10 @@ fn title_text(text: impl Into<String>) -> RichText {
 pub fn draw(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) -> egui::Rect {
     if st.export_scale == 0 {
         st.export_scale = 2;
+    }
+    if let Some(hv) = &mut st.home {
+        home::draw(ui, hv, st.native_chrome, st.translucent_sidebar);
+        return egui::Rect::NOTHING;
     }
     let p = theme::pal(ui);
     let sidebar_fill = if st.translucent_sidebar {
@@ -129,22 +142,35 @@ fn top_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
             menu_bar(ui, ed, st);
             ui.add_space(8.0);
         }
-        let file = ed
-            .file_path
-            .as_ref()
-            .and_then(|p| p.file_name())
-            .map(|f| f.to_string_lossy().to_string())
-            .unwrap_or_else(|| "Not saved".into());
+        if theme::icon_button(ui, theme::Icon::Grid, 26.0, false)
+            .on_hover_text("All projects")
+            .clicked()
+        {
+            ed.requests.push(crate::editor::AppRequest::Home);
+        }
+        ui.add_space(4.0);
+        let title = if st.project_name.is_empty() {
+            ed.doc.name.clone()
+        } else {
+            st.project_name.clone()
+        };
         ui.vertical(|ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
             ui.add_space(if st.native_chrome { 6.0 } else { 1.0 });
-            ui.label(title_text(&ed.doc.name));
-            let edited = if ed.is_dirty() { " — Edited" } else { "" };
-            ui.label(
-                RichText::new(format!("{file}{edited}"))
-                    .size(theme::SECONDARY)
-                    .color(p.secondary),
-            );
+            ui.label(title_text(title));
+            let state = if !st.save_state.is_empty() {
+                st.save_state.clone()
+            } else if ed.is_dirty() {
+                "Edited".into()
+            } else {
+                String::new()
+            };
+            let sub = if state.is_empty() {
+                ed.page_name().to_string()
+            } else {
+                format!("{} — {state}", ed.page_name())
+            };
+            ui.label(RichText::new(sub).size(theme::SECONDARY).color(p.secondary));
         });
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
@@ -194,10 +220,14 @@ fn top_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
 fn menu_bar(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
     {
         ui.menu_button("File", |ui| {
-            menu_item(ui, ed, "New", Action::New);
-            menu_item(ui, ed, "Open…", Action::Open);
-            menu_item(ui, ed, "Save", Action::Save);
-            menu_item(ui, ed, "Save as…", Action::SaveAs);
+            menu_item(ui, ed, "New project", Action::New);
+            menu_item(ui, ed, "Import…", Action::Open);
+            menu_item(ui, ed, "Save now", Action::Save);
+            menu_item(ui, ed, "Duplicate project", Action::SaveAs);
+            if ui.button("All projects").clicked() {
+                ed.requests.push(crate::editor::AppRequest::Home);
+                ui.close();
+            }
             ui.separator();
             menu_item(ui, ed, "Export PNG…", Action::ExportPng);
             menu_item(ui, ed, "Export SVG…", Action::ExportSvg);

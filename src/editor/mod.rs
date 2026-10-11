@@ -4,6 +4,7 @@
 
 pub mod hit;
 pub mod input;
+pub mod pages;
 pub mod shortcuts;
 pub mod snap;
 
@@ -13,6 +14,7 @@ use crate::ink::{self, InkBuilder};
 use crate::model::{Color, Document, Node, NodeId, NodeKind, StrokePoint, TextAlign};
 use crate::text;
 pub use input::{Button, InputEvent, Key, Modifiers};
+pub use pages::{PageSlot, PageStash};
 use snap::Guide;
 use std::path::PathBuf;
 
@@ -72,6 +74,8 @@ impl Tool {
 /// Requests the editor can't fulfil itself (dialogs, file system, clipboard).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AppRequest {
+    /// Back to the projects home screen.
+    Home,
     New,
     Open,
     Save,
@@ -156,6 +160,8 @@ pub struct Editor {
     pub status: String,
     clipboard: Vec<Node>,
     clipboard_roots: Vec<NodeId>,
+    /// Page the clipboard was copied from; pasting elsewhere keeps positions.
+    clipboard_page: Option<String>,
     gesture: Gesture,
     rec: Option<(Recording, Option<String>)>,
     saved_marker: Option<usize>,
@@ -164,6 +170,11 @@ pub struct Editor {
     pub revision: u64,
     /// Fit the camera to the content once the real viewport size is known.
     pub pending_fit: bool,
+    /// Pages of the open project; the active one's content is `doc`/`history`/`camera`.
+    pub pages: Vec<PageSlot>,
+    pub active_page: usize,
+    /// Page list or names changed (not tracked by undo history).
+    pub meta_dirty: bool,
 }
 
 impl Default for Editor {
@@ -174,6 +185,10 @@ impl Default for Editor {
 
 impl Editor {
     pub fn new(doc: Document) -> Editor {
+        let name = match doc.name.as_str() {
+            "" | "Untitled" => "Page 1".to_string(),
+            n => n.to_string(),
+        };
         Editor {
             doc,
             history: History::default(),
@@ -197,12 +212,16 @@ impl Editor {
             status: String::new(),
             clipboard: Vec::new(),
             clipboard_roots: Vec::new(),
+            clipboard_page: None,
             gesture: Gesture::None,
             rec: None,
             saved_marker: Some(0),
             last_click: None,
             revision: 0,
             pending_fit: false,
+            pages: vec![PageSlot::new(&name)],
+            active_page: 0,
+            meta_dirty: false,
         }
     }
 
@@ -281,6 +300,18 @@ impl Editor {
         self.selection.retain(|id| self.doc.nodes.contains_key(id));
     }
 
+    /// A pointer gesture (drag, draw, resize...) is in progress.
+    pub fn is_busy(&self) -> bool {
+        !matches!(self.gesture, Gesture::None)
+    }
+
+    /// Commit an open transaction unless a gesture or text edit still owns it.
+    pub fn commit_pending(&mut self) {
+        if !self.is_busy() && self.text_edit.is_none() {
+            self.commit();
+        }
+    }
+
     pub fn is_dirty(&self) -> bool {
         self.saved_marker != Some(self.history.undo_len()) || self.rec.is_some()
     }
@@ -295,6 +326,12 @@ impl Editor {
         *self = Editor {
             viewport: self.viewport,
             ink_width: self.ink_width,
+            ink_smoothing: self.ink_smoothing,
+            ink_color: self.ink_color,
+            snapping: self.snapping,
+            clipboard: std::mem::take(&mut self.clipboard),
+            clipboard_roots: std::mem::take(&mut self.clipboard_roots),
+            clipboard_page: self.clipboard_page.take(),
             ..Editor::new(doc)
         };
         self.file_path = path;
@@ -1403,12 +1440,22 @@ impl Editor {
                 self.copy();
                 self.delete_selection();
             }
-            A::Paste => self.paste(v2(PASTE_OFFSET, PASTE_OFFSET)),
+            A::Paste => {
+                // Same page: offset so the copy is visible. Another page or project: keep the
+                // position, as in Figma.
+                let same = self.clipboard_page.as_deref() == Some(self.active_page_id());
+                let d = if same { PASTE_OFFSET } else { 0.0 };
+                self.paste(v2(d, d))
+            }
             A::Duplicate => {
-                let saved = (self.clipboard.clone(), self.clipboard_roots.clone());
+                let saved = (
+                    self.clipboard.clone(),
+                    self.clipboard_roots.clone(),
+                    self.clipboard_page.clone(),
+                );
                 self.copy();
                 self.paste(v2(PASTE_OFFSET, PASTE_OFFSET));
-                (self.clipboard, self.clipboard_roots) = saved;
+                (self.clipboard, self.clipboard_roots, self.clipboard_page) = saved;
             }
             A::Forward => self.reorder(|i, _| i + 1),
             A::Backward => self.reorder(|i, _| i.saturating_sub(1)),
@@ -1548,6 +1595,7 @@ impl Editor {
             .filter_map(|id| self.doc.get(id).cloned())
             .collect();
         self.clipboard_roots = roots;
+        self.clipboard_page = Some(self.active_page_id().to_string());
         self.status = format!("Copied {} layer(s)", self.clipboard_roots.len());
     }
 

@@ -200,6 +200,8 @@ impl<'a> Tx<'a> {
 pub struct History {
     undo: Vec<Change>,
     redo: Vec<Change>,
+    /// Bumps on every commit, undo and redo, so savers can tell whether anything changed.
+    generation: u64,
 }
 
 impl History {
@@ -229,6 +231,7 @@ impl History {
             next_id: (rec.next_id_before, doc.next_id),
             coalesce_key,
         };
+        self.generation += 1;
         if let (Some(key), Some(top)) = (&change.coalesce_key, self.undo.last_mut())
             && self.redo.is_empty()
             && top.coalesce_key.as_ref() == Some(key)
@@ -247,6 +250,7 @@ impl History {
     pub fn undo(&mut self, doc: &mut Document) -> Option<String> {
         let c = self.undo.pop()?;
         c.apply(doc, false);
+        self.generation += 1;
         let label = c.label.clone();
         self.redo.push(c);
         Some(label)
@@ -255,11 +259,15 @@ impl History {
     pub fn redo(&mut self, doc: &mut Document) -> Option<String> {
         let c = self.redo.pop()?;
         c.apply(doc, true);
+        self.generation += 1;
         let label = c.label.clone();
         self.undo.push(c);
         Some(label)
     }
 
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
     pub fn can_undo(&self) -> bool {
         !self.undo.is_empty()
     }

@@ -260,3 +260,113 @@ pub fn showcase() -> Editor {
     ed.pending_fit = true;
     ed
 }
+
+/// A moodboard: color swatches, type specimens and a sketch.
+pub fn moodboard() -> Editor {
+    let mut ed = Editor::default();
+    ed.doc.name = "Brand moodboard".into();
+    let ink = Color::INK;
+    let mut f = shape(
+        NodeKind::Frame { clip: true },
+        Rect::new(0.0, 0.0, 720.0, 460.0),
+        Some(Color::rgb(0xfb, 0xf7, 0xf0)),
+        0.0,
+    );
+    f.name = "Moodboard".into();
+    let f = ed.add_node(f, None);
+    let swatches = [
+        Color::rgb(0xff, 0x6b, 0x4a),
+        Color::rgb(0xff, 0xc8, 0x3d),
+        Color::rgb(0x2f, 0x6f, 0xf3),
+        Color::rgb(0x1c, 0x1c, 0x1e),
+    ];
+    for (i, c) in swatches.into_iter().enumerate() {
+        let mut s = shape(
+            NodeKind::Ellipse,
+            Rect::new(40.0 + i as f64 * 110.0, 40.0, 90.0, 90.0),
+            Some(c),
+            0.0,
+        );
+        s.name = "Swatch".into();
+        ed.add_node(s, Some(f));
+    }
+    ed.add_node(text_node("Aa", 96.0, v2(40.0, 170.0), ink), Some(f));
+    ed.add_node(
+        text_node(
+            "Warm, bold, friendly.\nInter for everything.",
+            20.0,
+            v2(200.0, 200.0),
+            Color::rgb(0x55, 0x55, 0x5c),
+        ),
+        Some(f),
+    );
+    let mut card = shape(
+        NodeKind::Rect,
+        Rect::new(480.0, 160.0, 200.0, 260.0),
+        Some(Color::rgb(0xff, 0x6b, 0x4a)),
+        18.0,
+    );
+    card.name = "Card".into();
+    ed.add_node(card, Some(f));
+    sketch(
+        &mut ed,
+        &wave(v2(60.0, 380.0), 360.0, 18.0, 2.5, 60),
+        4.0,
+        Color::rgb(0x2f, 0x6f, 0xf3),
+    );
+    ed
+}
+
+/// A three-screen onboarding flow with connectors.
+pub fn flow() -> Editor {
+    let mut ed = Editor::default();
+    ed.doc.name = "Onboarding flow".into();
+    let blue = Color::rgb(0x2f, 0x6f, 0xf3);
+    for (i, title) in ["Welcome", "Pick a plan", "All set"]
+        .into_iter()
+        .enumerate()
+    {
+        let x = i as f64 * 300.0;
+        let mut f = shape(
+            NodeKind::Frame { clip: true },
+            Rect::new(x, 0.0, 220.0, 420.0),
+            Some(Color::WHITE),
+            16.0,
+        );
+        f.name = title.into();
+        let f = ed.add_node(f, None);
+        ed.add_node(text_node(title, 22.0, v2(20.0, 40.0), Color::INK), Some(f));
+        for k in 0..3 {
+            let mut r = shape(
+                NodeKind::Rect,
+                Rect::new(20.0, 100.0 + k as f64 * 70.0, 180.0, 52.0),
+                Some(Color::rgb(0xf0, 0xf0, 0xf4)),
+                10.0,
+            );
+            r.name = "Row".into();
+            ed.add_node(r, Some(f));
+        }
+        let mut b = shape(
+            NodeKind::Rect,
+            Rect::new(20.0, 350.0, 180.0, 44.0),
+            Some(blue),
+            22.0,
+        );
+        b.name = "Button".into();
+        ed.add_node(b, Some(f));
+        if i < 2 {
+            let mut l = Node::new(
+                NodeId(0),
+                NodeKind::Line {
+                    a: v2(0.0, 0.0),
+                    b: v2(80.0, 0.0),
+                },
+                Rect::new(x + 220.0, 210.0, 80.0, 0.0),
+            );
+            l.style.stroke = Some(blue);
+            l.style.stroke_width = 3.0;
+            ed.add_node(l, None);
+        }
+    }
+    ed
+}

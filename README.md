@@ -15,15 +15,25 @@ layers panel, transactional undo/redo, a local `.paper-rs` file format, and PNG/
 > shaders, icons, fonts or assets are used or committed. The UI and canvas text use
 > [Inter](https://rsms.me/inter/) 4.1 (SIL OFL 1.1), bundled in `assets/fonts/`.
 
+## Projects
+
+paper-rs opens on a **home screen** of your projects (recents grid with thumbnails, New, Import,
+and Rename / Duplicate / Move to Trash from each card's ⋯ menu or right-click; restore from
+Trash). Each project is a plain folder in `~/Documents/paper-rs/<name>/` holding `project.json`
+and one JSON file per page in `pages/`. Work is autosaved about a second after each change with
+crash-safe atomic writes; files are versioned and older versions migrate on load. Set
+`PAPER_RS_HOME` to use another folder.
+
 ## Build and run
 
 You need Rust 1.95 or newer (`rust-version` in `Cargo.toml`; the latest stable is recommended). Install it with [rustup](https://rustup.rs).
 
 ```sh
 cargo build --release
-./target/release/paper-rs                  # empty canvas
-./target/release/paper-rs --demo           # sample planning board
-./target/release/paper-rs board.paper-rs   # open a document
+./target/release/paper-rs                  # projects home screen
+./target/release/paper-rs --demo           # sample planning board (not saved)
+./target/release/paper-rs ~/Documents/paper-rs/Plan   # open a project folder
+./target/release/paper-rs board.paper-rs   # open a paper-rs 0.1 document
 ```
 
 ### macOS
