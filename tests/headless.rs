@@ -670,11 +670,19 @@ fn m6_svg_export_matches_gpu_render() {
     let e = demo::showcase();
     let gpu_img = png::render(g, &e.doc, None, 1.0, Some(Color::WHITE)).unwrap();
     let s = svg::export(&e.doc, None, Some(Color::WHITE)).unwrap();
-    let tree = resvg::usvg::Tree::from_str(&s, &resvg::usvg::Options::default()).expect("valid SVG");
+    let tree =
+        resvg::usvg::Tree::from_str(&s, &resvg::usvg::Options::default()).expect("valid SVG");
     let (w, h) = gpu_img.dimensions();
-    assert_eq!((tree.size().width() as u32, tree.size().height() as u32), (w, h));
+    assert_eq!(
+        (tree.size().width() as u32, tree.size().height() as u32),
+        (w, h)
+    );
     let mut pm = resvg::tiny_skia::Pixmap::new(w, h).unwrap();
-    resvg::render(&tree, resvg::tiny_skia::Transform::default(), &mut pm.as_mut());
+    resvg::render(
+        &tree,
+        resvg::tiny_skia::Transform::default(),
+        &mut pm.as_mut(),
+    );
     let svg_img = image::RgbaImage::from_raw(w, h, pm.data().to_vec()).unwrap();
     svg_img.save(shot("m6_export_svg_via_resvg.png")).unwrap();
     // Allow anti-aliasing differences along edges, but no missing or miscolored content.
@@ -685,5 +693,59 @@ fn m6_svg_export_matches_gpu_render() {
         .count();
     let pct = differing as f64 / (w * h) as f64 * 100.0;
     eprintln!("SVG vs GPU: {differing} px differ ({pct:.3}%)");
-    assert!(pct < 0.5, "SVG export diverges from the GPU render: {pct:.3}%");
+    assert!(
+        pct < 0.5,
+        "SVG export diverges from the GPU render: {pct:.3}%"
+    );
+}
+
+/// Regression: on macOS the first surface frame is often `Occluded`. The textures delta from that
+/// skipped frame (the initial font atlas) must still be uploaded, or the next frame's partial
+/// atlas update panics with "Tried to update a texture that has not been allocated yet".
+#[test]
+fn skipped_first_frame_keeps_egui_textures_in_sync() {
+    let Some(g) = gpu() else { return };
+    let ctx = egui::Context::default();
+    paper_rs::ui::setup_style(&ctx);
+    let mut e = demo::showcase();
+    let mut st = UiState::default();
+    let (pts, ppp) = ([800.0f32, 600.0f32], 2.0f32);
+    let size = [(pts[0] * ppp) as u32, (pts[1] * ppp) as u32];
+    let input = || egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(
+            egui::Pos2::ZERO,
+            egui::vec2(pts[0], pts[1]),
+        )),
+        viewports: std::iter::once((
+            egui::ViewportId::ROOT,
+            egui::ViewportInfo {
+                native_pixels_per_point: Some(ppp),
+                ..Default::default()
+            },
+        ))
+        .collect(),
+        ..Default::default()
+    };
+    let mut painter = frame::Painter::new(&g.device, paper_rs::render::gpu::OFFSCREEN_FORMAT);
+    let tex = g.target(size);
+    let view = tex.create_view(&Default::default());
+    // Frame 1: surface unavailable -> skipped.
+    let mut l = frame::layout(&ctx, input(), &mut e, &mut st);
+    assert!(
+        !l.output.textures_delta.set.is_empty(),
+        "first frame should allocate the font atlas"
+    );
+    painter.skip_frame(&g.device, &g.queue, &mut l.output.textures_delta);
+    // Following frames render normally; force new glyphs so egui emits partial atlas updates.
+    for i in 0..4 {
+        let l = frame::layout(&ctx, input(), &mut e, &mut st);
+        ctx.fonts_mut(|f| {
+            let _ = f.layout_no_wrap(
+                format!("ÀÉÎÕÜ ŁŃŚŹ ΩΔΣ жфц {i} ✓✗"),
+                egui::FontId::proportional(13.0 + i as f32 * 7.0),
+                egui::Color32::BLACK,
+            );
+        });
+        painter.paint(&g.device, &g.queue, &view, size, &ctx, l, &e, true);
+    }
 }

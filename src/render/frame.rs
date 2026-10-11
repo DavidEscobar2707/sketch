@@ -79,11 +79,7 @@ impl Painter {
 
         let mut out = layout.output;
         let prims = ctx.tessellate(out.shapes, ppp);
-        for (id, deltas) in out.textures_delta.set.drain() {
-            for delta in &deltas {
-                self.egui.update_texture(device, queue, id, delta);
-            }
-        }
+        self.upload_textures(device, queue, &mut out.textures_delta);
         let sd = egui_wgpu::ScreenDescriptor {
             size_in_pixels: size,
             pixels_per_point: ppp,
@@ -113,9 +109,41 @@ impl Painter {
             self.egui.render(&mut pass, &prims, &sd);
         }
         queue.submit(extra.into_iter().chain([enc.finish()]));
-        for id in out.textures_delta.free.drain() {
+        self.free_textures(&mut out.textures_delta);
+    }
+
+    /// Apply `textures_delta.set` (allocations and partial updates). Must run for every
+    /// egui frame, even when the surface frame is skipped; otherwise a later partial
+    /// update targets a texture that was never allocated and egui-wgpu panics.
+    pub fn upload_textures(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        delta: &mut egui::TexturesDelta,
+    ) {
+        for (id, deltas) in delta.set.drain() {
+            for d in &deltas {
+                self.egui.update_texture(device, queue, id, d);
+            }
+        }
+    }
+
+    /// Apply `textures_delta.free`. Call only after rendering (or when no render happens).
+    pub fn free_textures(&mut self, delta: &mut egui::TexturesDelta) {
+        for id in delta.free.drain() {
             self.egui.free_texture(&id);
         }
+    }
+
+    /// Frame skipped (occluded / zero-size / surface error): keep texture state in sync.
+    pub fn skip_frame(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        delta: &mut egui::TexturesDelta,
+    ) {
+        self.upload_textures(device, queue, delta);
+        self.free_textures(delta);
     }
 }
 

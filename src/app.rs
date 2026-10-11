@@ -210,10 +210,19 @@ impl App {
         let frame = match g.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(f)
             | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
+            wgpu::CurrentSurfaceTexture::Occluded => {
+                // macOS reports Occluded until the window is on screen. Keep egui's texture
+                // state in sync, but don't spin: WindowEvent::Occluded(false) triggers a redraw.
+                log::debug!("surface occluded; skipping frame");
+                g.painter
+                    .skip_frame(&g.device, &g.queue, &mut l.output.textures_delta);
+                return;
+            }
             other => {
                 log::warn!("surface unavailable: {other:?}");
                 g.surface.configure(&g.device, &g.config);
-                l.output.textures_delta.clear();
+                g.painter
+                    .skip_frame(&g.device, &g.queue, &mut l.output.textures_delta);
                 g.window.request_redraw();
                 return;
             }
@@ -366,6 +375,7 @@ impl ApplicationHandler for App {
                 g.surface.configure(&g.device, &g.config);
                 redraw = true;
             }
+            WindowEvent::Occluded(false) => redraw = true,
             WindowEvent::RedrawRequested => self.redraw(),
             WindowEvent::ModifiersChanged(m) => {
                 let s = m.state();
