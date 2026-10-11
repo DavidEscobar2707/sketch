@@ -276,3 +276,36 @@ fn m2_copy_paste_between_pages_and_projects() {
     assert_eq!(ed.doc.nodes.len(), 1);
     std::fs::remove_dir_all(&store.root).ok();
 }
+
+#[test]
+fn m2_pages_panel_screenshot() {
+    let Some(g) = gpu() else { return };
+    let page = |name: &str, doc: paper_rs::model::Document| PageData {
+        id: paper_rs::project::new_id(),
+        name: name.into(),
+        doc,
+        camera: None,
+    };
+    let mut ed = Editor::default();
+    ed.open_pages(
+        vec![
+            page("Launch plan", demo::showcase().doc),
+            page("Moodboard", demo::moodboard().doc),
+            page("Flows", demo::flow().doc),
+            page("Archive", paper_rs::model::Document::default()),
+        ],
+        None,
+    );
+    ed.switch_page(2);
+    assert_eq!(ed.page_name(), "Flows");
+    let mut st = UiState {
+        project_name: "Q4 launch".into(),
+        save_state: "Saved".into(),
+        ..Default::default()
+    };
+    let img = frame::capture(g, &mut ed, &mut st, [1440.0, 900.0], 2.0, |ed| ed.zoom_to_fit());
+    img.save(shot("milestone2_pages.png")).unwrap();
+    // The canvas shows the Flows page: its blue buttons are on screen.
+    let blue = Color::rgb(0x2f, 0x6f, 0xf3);
+    assert!(count(&img, Rect::new(260.0, 60.0, 900.0, 800.0), |p| close(p, blue, 12)) > 500);
+}

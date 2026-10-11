@@ -2,6 +2,7 @@
 //! projects home screen.
 
 pub mod home;
+pub mod pages;
 
 use crate::editor::shortcuts::{self, Action};
 use crate::editor::{Editor, Tool};
@@ -29,6 +30,7 @@ pub struct UiState {
     pub project_name: String,
     /// Autosave state for the toolbar subtitle, e.g. "Saved" or "Saving…".
     pub save_state: String,
+    pub pages: pages::PagesUi,
 }
 
 pub fn setup_style(ctx: &egui::Context) {
@@ -44,7 +46,7 @@ fn from32(c: Color32) -> Color {
 }
 
 /// Section header, as in a macOS sidebar or inspector: 11pt semibold, secondary colour.
-fn section(ui: &mut Ui, title: &str) {
+pub(crate) fn section(ui: &mut Ui, title: &str) {
     ui.label(
         RichText::new(title)
             .font(theme::semibold(theme::SECONDARY))
@@ -278,6 +280,15 @@ fn export_options(ui: &mut Ui, st: &mut UiState) {
 }
 
 fn layers(ui: &mut Ui, ed: &mut Editor, st: &mut UiState) {
+    pages::panel(ui, ed, st);
+    ui.add_space(4.0);
+    let r = ui.available_rect_before_wrap();
+    ui.painter().hline(
+        r.x_range(),
+        r.top(),
+        egui::Stroke::new(1.0, theme::pal(ui).separator),
+    );
+    ui.add_space(6.0);
     ui.horizontal(|ui| {
         section(ui, "Layers");
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -596,11 +607,12 @@ fn design(ui: &mut Ui, ed: &mut Editor, _st: &mut UiState) {
             }
         });
         ui.separator();
-        ui.label(title_text("Document"));
-        let mut name = ed.doc.name.clone();
-        if ui.text_edit_singleline(&mut name).changed() {
-            ed.doc.name = name;
-            ed.revision += 1;
+        ui.label(title_text("Page"));
+        let mut name = ed.page_name().to_string();
+        let r = ui.text_edit_singleline(&mut name);
+        if r.changed() {
+            let i = ed.active_page;
+            ed.rename_page(i, &name);
         }
         ui.label(format!("{} layers", ed.doc.nodes.len()));
         return;

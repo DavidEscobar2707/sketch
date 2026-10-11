@@ -24,6 +24,11 @@ and one JSON file per page in `pages/`. Work is autosaved about a second after e
 crash-safe atomic writes; files are versioned and older versions migrate on load. Set
 `PAPER_RS_HOME` to use another folder.
 
+A project has any number of **pages** (Pages list at the top of the left sidebar: + to add,
+double-click to rename, right-click to duplicate or delete, drag to reorder). Each page is its
+own infinite canvas with its own undo history and view. Copy and paste works between pages and
+between projects.
+
 ## Build and run
 
 You need Rust 1.95 or newer (`rust-version` in `Cargo.toml`; the latest stable is recommended). Install it with [rustup](https://rustup.rs).

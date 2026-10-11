@@ -13,11 +13,21 @@ are credited in `THIRD_PARTY.md`.
 |---|---|---|
 | Analysis notes | ✅ done | `analysis/FIGMA_NOTES.md`, `analysis/EXCALIDRAW_NOTES.md`, fixtures in `tests/fixtures/excalidraw/` |
 | P1: local projects, home screen, autosave, atomic writes, versioned format | ✅ done | `src/project/`, `src/session.rs`, `src/io/atomic.rs`, `tests/projects.rs::m1_*`, `milestone1_home.png`, `milestone1_trash.png` |
-| P2: multiple pages, infinite canvas per page | ⏳ | |
+| P2: multiple pages, infinite canvas per page | ✅ done | `src/editor/pages.rs`, `src/ui/pages.rs`, `tests/projects.rs::m2_*`, `milestone2_pages.png` |
 | P3: Figma core | ⏳ | |
 | P4: Excalidraw core | ⏳ | |
 | P5: inspector, layers drag-reorder, command palette, shortcuts | ⏳ | |
 | P6: import/export (PNG/SVG/PDF, .excalidraw, SVG), cross-project paste | ⏳ | |
+
+### P2 notes
+
+* Each page is its own infinite canvas with its own undo history, selection and camera. The
+  active page lives in the editor; the others are parked in their slot (`PageStash`).
+* Pages panel at the top of the left sidebar: click to switch, + to add, double-click to rename,
+  right-click for Rename / Duplicate / Delete, drag to reorder. The last page can't be deleted.
+* Paste on another page (or in another project) keeps the original position; paste on the same
+  page offsets by 16 px.
+* Deleting a page isn't undoable (the page file is removed at the next save).
 
 ### P1 notes
 

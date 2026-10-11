@@ -50,7 +50,11 @@ impl Editor {
         let clipboard_roots = std::mem::take(&mut self.clipboard_roots);
         let clipboard_page = self.clipboard_page.take();
         let first = pages[active_i].clone();
-        self.load(first.doc, first.camera, None);
+        let doc = Document {
+            name: first.name.clone(),
+            ..first.doc
+        };
+        self.load(doc, first.camera, None);
         self.clipboard = clipboard;
         self.clipboard_roots = clipboard_roots;
         self.clipboard_page = clipboard_page;
