@@ -183,7 +183,10 @@ fn build(root: &Path) -> (exec::SessionHost, NodeId) {
 
     // Freehand ink through the real pencil input path.
     let ed = &mut h.ed;
-    ed.camera = paper_rs::geom::Camera { pan: v2(-40.0, -40.0), zoom: 1.0 };
+    ed.camera = paper_rs::geom::Camera {
+        pan: v2(-40.0, -40.0),
+        zoom: 1.0,
+    };
     let loop_pts: Vec<V2> = (0..=96)
         .map(|i| {
             let t = i as f64 / 96.0 * std::f64::consts::TAU * 1.08 - 2.2;
@@ -202,15 +205,14 @@ fn build(root: &Path) -> (exec::SessionHost, NodeId) {
 }
 
 /// `frame::capture`, with the appearance chosen instead of falling back to light.
-fn capture(
-    gpu: &Headless,
-    ed: &mut Editor,
-    st: &mut UiState,
-    dark: bool,
-) -> image::RgbaImage {
+fn capture(gpu: &Headless, ed: &mut Editor, st: &mut UiState, dark: bool) -> image::RgbaImage {
     let ctx = egui::Context::default();
     ui::setup_style(&ctx);
-    ctx.set_theme(if dark { egui::Theme::Dark } else { egui::Theme::Light });
+    ctx.set_theme(if dark {
+        egui::Theme::Dark
+    } else {
+        egui::Theme::Light
+    });
     let size = [
         (WINDOW[0] * PPP).round() as u32,
         (WINDOW[1] * PPP).round() as u32,
@@ -255,7 +257,7 @@ fn frame_camera(ed: &mut Editor) {
 fn main() {
     let out = PathBuf::from(std::env::args().nth(1).unwrap_or_else(|| "out".into()));
     std::fs::create_dir_all(&out).unwrap();
-    let root = std::env::temp_dir().join("paper-rs-site-shots");
+    let root = std::env::temp_dir().join(format!("paper-rs-site-shots-{}", std::process::id()));
     let (mut h, _button) = build(&root);
     let gpu = Headless::new().expect("no GPU adapter");
     println!("adapter: {}", gpu.adapter_info.name);
@@ -267,8 +269,19 @@ fn main() {
             ..Default::default()
         };
         let img = capture(&gpu, &mut h.ed, &mut st, dark);
-        let path = out.join(if dark { "app-dark.png" } else { "app-light.png" });
+        let path = out.join(if dark {
+            "app-dark.png"
+        } else {
+            "app-light.png"
+        });
         img.save(&path).unwrap();
-        println!("wrote {} ({}x{})", path.display(), img.width(), img.height());
+        println!(
+            "wrote {} ({}x{})",
+            path.display(),
+            img.width(),
+            img.height()
+        );
     }
+    drop(h);
+    let _ = std::fs::remove_dir_all(&root);
 }
