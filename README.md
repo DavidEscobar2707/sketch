@@ -337,6 +337,7 @@ src/mcp/           MCP server (rmcp): tools, HTML/CSS mapping, HTTP service
 src/bin/paper-rs-mcp.rs  stdio bridge to the running app
 analysis/          reverse-engineering findings and design (raw dumps are gitignored)
 docs/screenshots/  headless renders produced by `cargo test`
+site/              the download page (SvelteKit on Vercel); see site/README.md
 ```
 
 ## License
