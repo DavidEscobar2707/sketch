@@ -37,17 +37,6 @@
 	<meta name="twitter:description" content={DESCRIPTION} />
 	<meta name="twitter:image" content={ogImage} />
 	<meta name="twitter:image:alt" content={ogAlt} />
-	{#each shots as shot (shot.theme)}
-		<link
-			rel="preload"
-			as="image"
-			type="image/avif"
-			imagesrcset={srcset(shot.theme, 'avif')}
-			imagesizes={sizes}
-			media="(prefers-color-scheme: {shot.theme})"
-			fetchpriority="high"
-		/>
-	{/each}
 </svelte:head>
 
 <div class="wrap">
@@ -92,6 +81,23 @@
 					</picture>
 				{/each}
 			</div>
+			<!-- Both screenshots load lazily so the hidden one never downloads. This starts the visible
+			one right away, using the theme app.html's script already applied; a preload in the head
+			could only follow the system setting. -->
+			<script>
+				{
+					const saved = document.documentElement.dataset.theme;
+					const theme =
+						saved === 'light' || saved === 'dark'
+							? saved
+							: matchMedia('(prefers-color-scheme: dark)').matches
+								? 'dark'
+								: 'light';
+					const img = document.querySelector(`.shot .when-${theme} img`);
+					img.fetchPriority = 'high';
+					img.loading = 'eager';
+				}
+			</script>
 		</section>
 
 		<section class="features" aria-label="Features">
