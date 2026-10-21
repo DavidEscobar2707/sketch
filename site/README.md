@@ -5,8 +5,9 @@ SvelteKit page, built for Vercel. It self-hosts its font and loads no scripts
 from other sites.
 
 `/download` is a Vercel function that answers with a 302 to
-`https://github.com/michaelshimeles/paper-rs/releases/latest/download/sketch-rs-universal.dmg`,
-so the button works once the newest published Sketch release includes `sketch-rs-universal.dmg`.
+`https://github.com/michaelshimeles/paper-rs/releases/latest/download/Sketch.dmg`, the
+universal app that `scripts/release-macos.sh` builds, so the button works once the newest
+published Sketch release includes `Sketch.dmg`.
 
 ## Develop
 
