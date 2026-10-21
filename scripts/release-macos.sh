@@ -58,6 +58,8 @@ min_macos=$(plutil -extract LSMinimumSystemVersion raw "$plist")
 export MACOSX_DEPLOYMENT_TARGET=$min_macos
 repo=https://github.com/michaelshimeles/paper-rs
 target_dir=$(cargo metadata --format-version 1 --no-deps | plutil -extract target_directory raw -o - -)
+out=$target_dir/universal-apple-darwin/release
+lock=$out.lock
 sparkle=$(scripts/fetch-sparkle.sh)
 sparkle_account=${SPARKLE_ACCOUNT:-sketch}
 sparkle_key=$(plutil -extract SUPublicEDKey raw "$plist")
@@ -82,8 +84,13 @@ cleanup() {
   done
   rm -rf "$tmp"
   [ -z "${work:-}" ] || rm -rf "$work"
+  [ "$(cat "$lock" 2>/dev/null)" != $$ ] || rm -f "$lock"
 }
 trap cleanup EXIT
+# Two runs would swap their builds into the same $out. shlock ignores a lock whose process has
+# exited.
+mkdir -p "$(dirname "$out")"
+shlock -f "$lock" -p $$ || { echo "another release run (pid $(cat "$lock")) is writing $out" >&2; exit 1; }
 
 # Submits $1, waits for Apple's verdict, then staples the ticket to $2.
 notarize() {
@@ -102,10 +109,8 @@ notarize() {
 for target in aarch64-apple-darwin x86_64-apple-darwin; do
   cargo build --release --locked --target "$target" --bin sketch-rs --bin sketch-rs-mcp
 done
-out=$target_dir/universal-apple-darwin/release
 # Everything is built in $work, beside $out on the same volume, and replaces $out by renaming once
 # the last step has passed, so a failed run leaves the previous build's files in place.
-mkdir -p "$(dirname "$out")"
 work=$(mktemp -d "$out.new.XXXXXX")
 finish() {
   rm -rf "$out.old"
