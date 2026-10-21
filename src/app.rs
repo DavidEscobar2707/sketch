@@ -209,11 +209,15 @@ impl App {
         true
     }
 
-    /// Autosave when due. Called after every frame and on timer wake-ups.
-    fn tick_autosave(&mut self) {
-        if self.session.autosave_due(&self.ed, Instant::now()) {
+    /// Autosave when due; returns whether it tried. `about_to_wait` calls this rather than
+    /// the frame code, because an occluded window draws no frames and MCP edits made while it
+    /// sits behind other windows still have to reach the disk.
+    fn tick_autosave(&mut self) -> bool {
+        let due = self.session.autosave_due(&self.ed, Instant::now());
+        if due {
             self.save_project(false);
         }
+        due
     }
 
     fn show_home(&mut self) {
@@ -700,7 +704,6 @@ impl App {
             || self.st.home.as_ref().is_some_and(|h| !h.actions.is_empty());
         self.handle_requests();
         self.handle_home_actions();
-        self.tick_autosave();
         if self.st.library.dirty {
             self.st.library.dirty = false;
             if let Err(e) = self.st.library.library.save() {
@@ -1204,16 +1207,12 @@ impl ApplicationHandler<UserEvent> for App {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        // Autosave runs off a timer so it also fires while the window sits idle.
-        if self
-            .session
-            .next_deadline()
-            .is_some_and(|d| Instant::now() >= d)
+        // Starts the autosave clock after any edit, and saves once the timer below wakes the
+        // loop past the deadline, even while the window sits idle.
+        if self.tick_autosave()
+            && let Some(g) = &self.gfx
         {
-            self.tick_autosave();
-            if let Some(g) = &self.gfx {
-                g.window.request_redraw();
-            }
+            g.window.request_redraw();
         }
         let wake = match (self.next_repaint, self.session.next_deadline()) {
             (Some(a), Some(b)) => Some(a.min(b)),
