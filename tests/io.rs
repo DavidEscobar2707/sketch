@@ -354,3 +354,26 @@ fn m6_cli_exports_pdf_and_imports_excalidraw() {
     );
     std::fs::remove_dir_all(dir).ok();
 }
+
+#[test]
+fn cli_reads_paper_rs_home_from_before_the_rename() {
+    let dir = tmp("old-home");
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_sketch-rs"))
+        .env_remove("SKETCH_RS_HOME")
+        .env("PAPER_RS_HOME", dir.join("home"))
+        .arg("--import")
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/excalidraw/basic.excalidraw"
+        ))
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let proj = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim().to_string());
+    assert!(proj.starts_with(dir.join("home")), "{}", proj.display());
+    std::fs::remove_dir_all(dir).ok();
+}

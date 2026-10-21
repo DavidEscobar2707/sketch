@@ -88,10 +88,10 @@ pub fn folder_name(name: &str) -> String {
 }
 
 impl Store {
-    /// `$SKETCH_RS_HOME`, else `~/Documents/sketch-rs`. A `~/Documents/paper-rs` folder from
-    /// before the rename is moved there the first time.
+    /// `$SKETCH_RS_HOME` (or `$PAPER_RS_HOME`), else `~/Documents/sketch-rs`. A
+    /// `~/Documents/paper-rs` folder from before the rename is moved there the first time.
     pub fn default_root() -> PathBuf {
-        if let Some(p) = std::env::var_os("SKETCH_RS_HOME") {
+        if let Some(p) = crate::env_var("HOME") {
             return PathBuf::from(p);
         }
         let docs = dirs::document_dir()

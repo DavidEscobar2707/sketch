@@ -834,7 +834,7 @@ impl ApplicationHandler<UserEvent> for App {
             .with_min_inner_size(winit::dpi::LogicalSize::new(720.0, 480.0));
         // SKETCH_RS_OPAQUE=1 turns off vibrancy (and window transparency) on macOS.
         #[cfg(target_os = "macos")]
-        let translucent = std::env::var_os("SKETCH_RS_OPAQUE").is_none();
+        let translucent = crate::env_var("OPAQUE").is_none();
         #[cfg(target_os = "macos")]
         let attrs = {
             use winit::platform::macos::WindowAttributesExtMacOS;
@@ -1386,7 +1386,7 @@ fn start_mcp(
     std::sync::mpsc::Receiver<crate::mcp::Call>,
     crate::mcp::server::Running,
 )> {
-    if std::env::var("SKETCH_RS_MCP").is_ok_and(|v| matches!(v.as_str(), "0" | "off" | "false")) {
+    if crate::env_var("MCP").is_some_and(|v| matches!(v.to_str(), Some("0" | "off" | "false"))) {
         return None;
     }
     let (tx, rx) = std::sync::mpsc::channel::<crate::mcp::Call>();

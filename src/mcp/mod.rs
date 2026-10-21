@@ -20,11 +20,11 @@ pub mod tools;
 pub const DEFAULT_PORT: u16 = 29_980;
 pub const ENDPOINT: &str = "/mcp";
 
-/// The port to serve on / connect to: `$SKETCH_RS_MCP_PORT`, else [`DEFAULT_PORT`].
+/// The port to serve on / connect to: `$SKETCH_RS_MCP_PORT` (or `$PAPER_RS_MCP_PORT`), else
+/// [`DEFAULT_PORT`].
 pub fn port() -> u16 {
-    std::env::var("SKETCH_RS_MCP_PORT")
-        .ok()
-        .and_then(|p| p.trim().parse().ok())
+    crate::env_var("MCP_PORT")
+        .and_then(|p| p.to_str()?.trim().parse().ok())
         .unwrap_or(DEFAULT_PORT)
 }
 

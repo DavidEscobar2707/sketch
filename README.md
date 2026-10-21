@@ -37,7 +37,8 @@ crash-safe atomic writes; files are versioned and older versions migrate on load
 `SKETCH_RS_HOME` to use another folder.
 
 Sketch used to be called paper-rs. On first launch it moves `~/Documents/paper-rs` to
-`~/Documents/sketch-rs`, and it still opens `.paper-rs` files and older libraries.
+`~/Documents/sketch-rs`, and it still opens `.paper-rs` files and older libraries. The old
+`PAPER_RS_*` environment variables still work when the matching `SKETCH_RS_*` one isn't set.
 
 A project has any number of **pages** (Pages list at the top of the left sidebar: + to add,
 double-click to rename, right-click to duplicate or delete, drag to reorder). Each page is its
