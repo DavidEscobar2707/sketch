@@ -20,7 +20,8 @@ This repo is Sketch, a native Rust infinite canvas built on wgpu, winit and
 egui, plus its download page in `site/`, a single prerendered SvelteKit page
 built for Vercel. The README covers building, running and testing the app, and
 `site/README.md` covers the page and its image pipeline. The app used to be
-called paper-rs, and the GitHub repo and checkout folders keep that name.
+called paper-rs. The GitHub repo is now `michaelshimeles/sketch`, but the
+checkout folders keep the old name.
 
 - Put worktrees in `../paper-rs-worktrees/<task-name>` on branches named
   `agent/<task-name>`. Outside the checkout, Cargo, Vite and svelte-check never
