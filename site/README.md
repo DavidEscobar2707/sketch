@@ -23,7 +23,7 @@ npm run preview   # serves the build, including /download
 
 ## Copy and version
 
-- Headline, features, shortcuts, install steps and footer: `src/routes/+page.svelte`
+- Headline, features, shortcuts, install section and footer: `src/routes/+page.svelte`
 - The demo under the hero: `src/lib/demo/`. `script.ts` holds its timeline, chapters, captions
   and sound cues; `Scene.svelte` lays out the desktop and the app window, and `board.ts` the
   canvas. The page draws it live in HTML and SVG, with hand-drawn shapes from rough.js.
