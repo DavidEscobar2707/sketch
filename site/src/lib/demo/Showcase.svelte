@@ -1,32 +1,23 @@
 <!-- From the terminal-rs download page (github.com/michaelshimeles/terminal-rs, site/src/lib/demo/Showcase.svelte). -->
 <script lang="ts">
-	import type { Attachment } from 'svelte/attachments';
 	import { span } from '#lib/ease.js';
 	import Scene from './Scene.svelte';
 	import type { Player } from './player.svelte.js';
 	import { CHAPTERS, DURATION, STAGE } from './script.js';
 
 	let { player }: { player: Player } = $props();
-	let scale = $state(1);
-
-	const fit: Attachment<HTMLElement> = (node) => {
-		const observer = new ResizeObserver(() => (scale = node.clientWidth / STAGE.w));
-		observer.observe(node);
-		return () => observer.disconnect();
-	};
 
 	const chapters = CHAPTERS.map((c, i) => ({ ...c, end: CHAPTERS[i + 1]?.t ?? DURATION }));
 </script>
 
 <div class="showcase">
-	<div
-		class="frame"
-		role="img"
-		aria-label="Demo: drawing an onboarding flow with hand-drawn boxes and arrows, leaving a sticky note, resizing a button and rounding its corners, an agent adding a Trail list screen, and exporting the page as a PNG."
-		{@attach fit}
-		{@attach player.observe}
-	>
-		<div class="stage" style:transform="scale({scale})">
+	<div class="frame" {@attach player.observe}>
+		<div
+			class="stage"
+			role="img"
+			aria-label="Demo: drawing an onboarding flow with hand-drawn boxes and arrows, leaving a sticky note, resizing a button and rounding its corners, an agent adding a Trail list screen, and exporting the page as a PNG."
+			style:--width="{STAGE.w}px"
+		>
 			<Scene t={player.time} />
 		</div>
 		{#if !player.sound}
@@ -111,6 +102,7 @@
 		max-width: 1200px;
 		aspect-ratio: 5 / 3;
 		overflow: hidden;
+		container-type: inline-size;
 		border-radius: 16px;
 		background: #0b0d18;
 		box-shadow:
@@ -129,6 +121,8 @@
 		top: 0;
 		left: 0;
 		transform-origin: 0 0;
+		/* tan(atan2(a, b)) is a / b. It fits the scene in CSS, before and without any script. */
+		transform: scale(tan(atan2(100cqw, var(--width))));
 	}
 
 	.listen {
