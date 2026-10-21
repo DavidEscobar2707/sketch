@@ -2,7 +2,7 @@
 export const SITE_URL = 'https://paper.rasmic.xyz';
 export const VERSION = '0.1.0';
 export const REPO_URL = 'https://github.com/michaelshimeles/paper-rs';
-export const DOWNLOAD_URL = `${REPO_URL}/releases/latest/download/paper-rs-universal.dmg`;
+export const DOWNLOAD_URL = `${REPO_URL}/releases/latest/download/sketch-rs-universal.dmg`;
 
 /** The release DMG is a universal binary. */
 export const ARCH = 'Apple Silicon and Intel';

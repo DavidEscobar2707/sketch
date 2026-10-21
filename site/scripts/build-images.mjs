@@ -1,6 +1,6 @@
 // Turns the brand SVGs and the app capture into the optimized files in static/.
 //
-//   npm run shots    renders scripts/screenshots/out/app-{light,dark}.png with paper-rs
+//   npm run shots    renders scripts/screenshots/out/app-{light,dark}.png with Sketch
 //   npm run images   this script; the Open Graph card shows app-dark.png
 
 import { execFileSync } from 'node:child_process';

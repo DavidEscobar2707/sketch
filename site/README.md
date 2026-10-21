@@ -1,12 +1,12 @@
-# paper-rs site
+# Sketch site
 
-The download page for [paper-rs](https://github.com/michaelshimeles/paper-rs), which it presents as
-Sketch: one prerendered SvelteKit page, built for Vercel. It self-hosts its font and loads no scripts
+The download page for [Sketch](https://github.com/michaelshimeles/paper-rs): one prerendered
+SvelteKit page, built for Vercel. It self-hosts its font and loads no scripts
 from other sites.
 
 `/download` is a Vercel function that answers with a 302 to
-`https://github.com/michaelshimeles/paper-rs/releases/latest/download/paper-rs-universal.dmg`,
-so the button works once the newest published paper-rs release includes `paper-rs-universal.dmg`.
+`https://github.com/michaelshimeles/paper-rs/releases/latest/download/sketch-rs-universal.dmg`,
+so the button works once the newest published Sketch release includes `sketch-rs-universal.dmg`.
 
 ## Develop
 
@@ -35,15 +35,15 @@ npm run preview   # serves the build, including /download
 Everything in `static/` comes from two scripts:
 
 ```sh
-npm run shots    # renders scripts/screenshots/out/app-{light,dark}.png with paper-rs itself
+npm run shots    # renders scripts/screenshots/out/app-{light,dark}.png with Sketch itself
 npm run images   # favicons, the touch icon and og.jpg into static/
 ```
 
-`npm run shots` builds `scripts/screenshots`, a small Rust program that links the paper-rs library
-from the root of this repository. It builds the board through paper-rs's MCP tools and renders it
+`npm run shots` builds `scripts/screenshots`, a small Rust program that links the Sketch library
+from the root of this repository. It builds the board through Sketch's MCP tools and renders it
 with the app's own renderer in both themes, at 2160 × 1350. The Open Graph card uses the dark
 capture, so rerun it when the app's look changes. Its Cargo target directory defaults to
-`~/.cache/paper-rs-site-shots`; set `CARGO_TARGET_DIR` to change it.
+`~/.cache/sketch-rs-site-shots`; set `CARGO_TARGET_DIR` to change it.
 
 `npm run images` needs Google Chrome to render the Open Graph card from
 `scripts/brand/og.html`; set `CHROME` to use another binary. The app icon is drawn in
