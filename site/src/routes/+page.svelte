@@ -1,6 +1,7 @@
 <!-- Layout and styles from the terminal-rs download page (github.com/michaelshimeles/terminal-rs, site/src/routes/+page.svelte). -->
 <script lang="ts">
 	import { resolve } from '$app/paths';
+	import DownloadCount from '#lib/DownloadCount.svelte';
 	import Logo from '#lib/Logo.svelte';
 	import AgentCard from '#lib/cards/AgentCard.svelte';
 	import AutoLayoutCard from '#lib/cards/AutoLayoutCard.svelte';
@@ -201,7 +202,7 @@
 		</p>
 		<div class="cta">
 			{@render download()}
-			<p class="meta">Free · Version {VERSION} · {ARCH} · macOS {MIN_MACOS} or later</p>
+			<p class="meta">Free · Version {VERSION} · {ARCH} · macOS {MIN_MACOS} or later<DownloadCount repo={REPO_URL} /></p>
 		</div>
 	</header>
 
