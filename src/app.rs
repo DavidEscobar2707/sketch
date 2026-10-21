@@ -757,6 +757,7 @@ impl App {
                     event_loop.exit();
                 }
             }
+            MenuCmd::CheckForUpdates => crate::macos::updater::check_for_updates(),
             MenuCmd::ToggleGrid => self.st.show_grid_off = !self.st.show_grid_off,
             MenuCmd::ToggleHelp => self.st.show_help = !self.st.show_help,
             // Menu key equivalents never reach egui, so while a text field is focused, hand
@@ -1206,7 +1207,21 @@ impl ApplicationHandler<UserEvent> for App {
         }
     }
 
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        // Quitting from the menu, the Dock or an update install skips CloseRequested, so save
+        // here instead of losing the edits that are still waiting for the autosave.
+        if self.session.project.is_some() {
+            self.save_project(true);
+        }
+    }
+
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // winit runs the first redraw before this, so Sparkle loads once the window is up.
+        // Later calls do nothing.
+        #[cfg(target_os = "macos")]
+        if self.gfx.is_some() {
+            crate::macos::updater::start();
+        }
         // Starts the autosave clock after any edit, and saves once the timer below wakes the
         // loop past the deadline, even while the window sits idle.
         if self.tick_autosave()
