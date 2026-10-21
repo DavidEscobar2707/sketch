@@ -36,14 +36,14 @@ npm run preview   # serves the build, including /download
 Everything in `static/` comes from two scripts:
 
 ```sh
-npm run shots    # renders scripts/screenshots/out/app-{light,dark}.png with Sketch itself
+npm run shots    # renders scripts/screenshots/out/og.png with Sketch itself
 npm run images   # favicons, the touch icon and og.jpg into static/
 ```
 
 `npm run shots` builds `scripts/screenshots`, a small Rust program that links the Sketch library
 from the root of this repository. It builds the board through Sketch's MCP tools and renders it
-with the app's own renderer in both themes, at 2160 × 1350. The Open Graph card uses the dark
-capture, so rerun it when the app's look changes. Its Cargo target directory defaults to
+with the app's own renderer in dark mode, at 2160 × 1350, framed for the part of the window the
+Open Graph card shows. Rerun it when the app's look changes. Its Cargo target directory defaults to
 `~/.cache/sketch-rs-site-shots`; set `CARGO_TARGET_DIR` to change it.
 
 `npm run images` needs Google Chrome to render the Open Graph card from
