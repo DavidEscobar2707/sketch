@@ -4,6 +4,13 @@ The download page for [Sketch](https://github.com/michaelshimeles/sketch): one p
 SvelteKit page, built for Vercel. It self-hosts its font and loads no scripts
 from other sites.
 
+The page counts visits with [Vercel Web Analytics](https://vercel.com/docs/analytics), which
+sets no cookies and collects no personal data. `src/routes/+layout.ts` injects it. In production
+the script and its events go to `/_vercel/insights` on the site's own domain; `npm run dev`
+loads Vercel's debug script instead, which logs events to the console and sends nothing. Turn
+Web Analytics on in the Vercel project's Analytics tab, or the script returns 404 and Vercel
+records nothing.
+
 `/download` is a Vercel function that answers with a 302 to
 `https://github.com/michaelshimeles/sketch/releases/latest/download/Sketch.dmg`, the
 universal app that `scripts/release-macos.sh` builds, so the button works once the newest

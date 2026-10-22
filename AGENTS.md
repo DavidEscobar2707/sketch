@@ -41,8 +41,10 @@ checkout folders keep the old name.
   and gets an entry in `THIRD_PARTY.md`.
 - Commit subjects follow the existing style: `feat(scope): …`,
   `fix(scope): …`, `docs: …`.
-- The download page stays one fast page with no analytics, tracking or
-  third-party requests, which is why it bundles its font from
+- The download page stays one fast page. Its only analytics is Vercel Web
+  Analytics, which sets no cookies, collects no personal data and loads from
+  the site's own domain. Add no other analytics, tracking or third-party
+  requests; that is why the page bundles its font from
   `@fontsource-variable/inter`. Its feature copy names only features the app
   ships, and its system requirements line follows `Cargo.toml` and the README.
 
