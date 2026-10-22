@@ -197,6 +197,42 @@ fn bottom_and_right_use_the_final_sizes() {
 }
 
 #[test]
+fn anchors_inside_a_hugging_absolute_frame_use_its_final_size() {
+    let mut h = host();
+    let ab = call(
+        &mut h,
+        "create_artboard",
+        json!({"name": "Nested", "styles": {"width": "200px", "height": "200px"}}),
+    );
+    // An absolute frame that hugs a 50x50 child, with a 20x20 badge 10 px from its right and
+    // bottom edges. The badge must be placed after the frame reaches 50x50.
+    let r = call(
+        &mut h,
+        "write_html",
+        json!({
+            "targetNodeId": ab["id"], "mode": "insert-children",
+            "html": r#"<div style="position:relative;width:200px;height:200px;"><div style="position:absolute;left:0;top:0;display:flex;"><div style="width:50px;height:50px;"></div><div style="position:absolute;right:10px;bottom:10px;width:20px;height:20px;"></div></div></div>"#,
+        }),
+    );
+    let doc = &h.ed.doc;
+    let wrap = doc.get(num(&r["createdNodeIds"][0])).unwrap();
+    let frame = doc.get(wrap.children[0]).unwrap();
+    assert_eq!(
+        (frame.rect.w, frame.rect.h),
+        (50.0, 50.0),
+        "{:?}",
+        frame.rect
+    );
+    let badge = doc.get(frame.children[1]).unwrap();
+    assert_eq!(
+        (badge.rect.x, badge.rect.y),
+        (20.0, 20.0),
+        "{:?}",
+        badge.rect
+    );
+}
+
+#[test]
 fn absolute_auto_layout_frames_arrange_their_children() {
     let mut h = host();
     let ab = call(

@@ -2109,13 +2109,17 @@ fn pin(n: &mut Node, parent_size: (f64, f64), right: Option<f64>, bottom: Option
     }
 }
 
-/// Settle absolute nodes after the relayout. Auto layout skips absolute children, so an absolute
-/// frame with auto layout has not arranged its children or found its hug size yet: lay it out.
-/// Then place right/bottom-anchored nodes again with the final sizes. Absolute nodes are out of
-/// the flow, so this changes no other size. `absolute` is in build order (children before their
-/// parents), so inner frames settle before the frames that contain them.
+/// Settle absolute nodes after the relayout, in two passes. Auto layout skips absolute
+/// children, so an absolute frame with auto layout has not arranged its children or found its
+/// hug size yet.
+///
+/// 1. Lay out every absolute frame. `absolute` is in build order (children before their
+///    parents), so inner frames reach their size before the frames that hug them.
+/// 2. Place right/bottom-anchored nodes again, now that every parent has its final size.
+///
+/// Absolute nodes are out of the flow, so neither pass changes another node's size.
 fn settle_absolute(tx: &mut Tx, absolute: &[(NodeId, Option<f64>, Option<f64>)]) {
-    for &(id, right, bottom) in absolute {
+    for &(id, _, _) in absolute {
         if tx.doc().get(id).is_some_and(|n| n.layout.is_some()) {
             for _ in 0..6 {
                 if !crate::layout::layout_frame(tx, id) {
@@ -2123,6 +2127,8 @@ fn settle_absolute(tx: &mut Tx, absolute: &[(NodeId, Option<f64>, Option<f64>)])
                 }
             }
         }
+    }
+    for &(id, right, bottom) in absolute {
         if right.is_none() && bottom.is_none() {
             continue;
         }
