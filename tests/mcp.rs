@@ -197,6 +197,51 @@ fn bottom_and_right_use_the_final_sizes() {
 }
 
 #[test]
+fn absolute_auto_layout_frames_arrange_their_children() {
+    let mut h = host();
+    let ab = call(
+        &mut h,
+        "create_artboard",
+        json!({"name": "Search", "styles": {"width": "390px", "height": "300px"}}),
+    );
+    // A search bar: icon, placeholder text that takes the free space, button. Once in the
+    // flow and once absolutely positioned: both must lay out the same way inside the bar.
+    let bar = |pos: &str| {
+        format!(
+            r#"<div style="{pos}width:334px;height:56px;display:flex;flex-direction:row;align-items:center;gap:10px;padding:0 6px 0 18px;box-sizing:border-box;"><div style="width:18px;height:18px;"></div><div style="font-size:15px;line-height:1;flex:1;">Try deep clean</div><div style="width:44px;height:44px;"></div></div>"#
+        )
+    };
+    let html = format!(
+        r#"<div style="position:relative;width:390px;height:300px;">{}{}</div>"#,
+        bar(""),
+        bar("position:absolute;left:28px;top:200px;")
+    );
+    let r = call(
+        &mut h,
+        "write_html",
+        json!({"targetNodeId": ab["id"], "mode": "insert-children", "html": html}),
+    );
+    let doc = &h.ed.doc;
+    let wrap = doc.get(num(&r["createdNodeIds"][0])).unwrap();
+    for &b in &wrap.children {
+        let row = doc.get(b).unwrap();
+        let text = doc.get(row.children[1]).unwrap();
+        // 334 wide, minus padding 18 + 6, the 18 icon, the 44 button and two 10 gaps.
+        assert!((text.rect.w - 228.0).abs() < 0.5, "{:?}", text.rect);
+        assert!(text.rect.h > 10.0, "{:?}", text.rect);
+        assert!((text.rect.x - 46.0).abs() < 0.5, "{:?}", text.rect);
+        // Centered on the cross axis (align-items: center).
+        let mid = text.rect.y + text.rect.h / 2.0;
+        assert!(
+            (mid - 28.0).abs() < 0.5,
+            "{:?} in {:?}",
+            text.rect,
+            row.rect
+        );
+    }
+}
+
+#[test]
 fn reading_tools_describe_the_page() {
     let mut h = host();
     let ab = call(
