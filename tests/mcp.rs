@@ -139,6 +139,64 @@ fn artboard_and_html_become_auto_layout_frames_and_text() {
 }
 
 #[test]
+fn bottom_and_right_use_the_final_sizes() {
+    let mut h = host();
+    let ab = call(
+        &mut h,
+        "create_artboard",
+        json!({"name": "Phone", "styles": {"width": "390px", "height": "844px"}}),
+    );
+    // A search bar pinned to the bottom of a hero block that hugs its content, a text block
+    // pinned to the bottom of a photo that hugs its two lines, and an icon pinned to the right
+    // of a stretched input. Each needs a size that is only known once the block is laid out.
+    let r = call(
+        &mut h,
+        "write_html",
+        json!({
+            "targetNodeId": ab["id"], "mode": "insert-children",
+            "html": r#"<div style="display:flex;flex-direction:column;">
+              <div style="position:relative;padding:4px 16px 28px;display:flex;flex-direction:column;">
+                <div style="position:relative;width:358px;height:272px;">
+                  <div style="position:absolute;left:20px;bottom:46px;display:flex;flex-direction:column;">
+                    <div style="font-size:40px;line-height:1;">Any service,</div>
+                    <div style="font-size:44px;line-height:1;">any time</div>
+                  </div>
+                </div>
+                <div style="position:absolute;left:28px;bottom:0;width:334px;height:56px;"></div>
+              </div>
+              <div style="position:relative;height:50px;">
+                <div style="position:absolute;right:14px;top:15px;width:20px;height:20px;"></div>
+              </div>
+            </div>"#,
+        }),
+    );
+    let doc = &h.ed.doc;
+    let col = doc.get(num(&r["createdNodeIds"][0])).unwrap();
+    let hero = doc.get(col.children[0]).unwrap();
+    assert_eq!(hero.rect.h, 304.0, "{:?}", hero.rect);
+    let photo = doc.get(hero.children[0]).unwrap();
+    let text = doc.get(photo.children[0]).unwrap();
+    assert!(text.rect.h > 80.0, "{:?}", text.rect);
+    let bottom = |n: &sketch_rs::model::Node| n.rect.y + n.rect.h;
+    assert!(
+        (bottom(text) - (272.0 - 46.0)).abs() < 0.5,
+        "{:?}",
+        text.rect
+    );
+    let bar = doc.get(hero.children[1]).unwrap();
+    assert_eq!(bar.rect.y, 248.0, "{:?}", bar.rect);
+    let input = doc.get(col.children[1]).unwrap();
+    let icon = doc.get(input.children[0]).unwrap();
+    assert_eq!(
+        icon.rect.x,
+        input.rect.w - 20.0 - 14.0,
+        "{:?} in {:?}",
+        icon.rect,
+        input.rect
+    );
+}
+
+#[test]
 fn reading_tools_describe_the_page() {
     let mut h = host();
     let ab = call(

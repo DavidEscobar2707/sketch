@@ -1490,6 +1490,8 @@ struct Builder<'t, 'a> {
     page_id: String,
     ignored: BTreeSet<String>,
     warnings: Vec<String>,
+    /// Nodes placed by `right` / `bottom`, placed again once the layout has settled.
+    anchored: Vec<(NodeId, Option<f64>, Option<f64>)>,
 }
 
 impl Builder<'_, '_> {
@@ -1507,15 +1509,14 @@ impl Builder<'_, '_> {
 
     /// Positioning that needs the final size (right/bottom).
     fn place(&mut self, id: NodeId, a: &css::Applied, parent: &Parent) {
-        if let (Some(ps), true) = (parent.size, a.right.is_some() || a.bottom.is_some()) {
-            let n = self.tx.node_mut(id).unwrap();
-            if let Some(r) = a.right {
-                n.rect.x = ps.0 - n.rect.w - r;
-            }
-            if let Some(b) = a.bottom {
-                n.rect.y = ps.1 - n.rect.h - b;
-            }
+        if a.right.is_none() && a.bottom.is_none() {
+            return;
         }
+        if let Some(ps) = parent.size {
+            pin(self.tx.node_mut(id).unwrap(), ps, a.right, a.bottom);
+        }
+        // The node or its parent may still grow to fit content added later (hug sizing).
+        self.anchored.push((id, a.right, a.bottom));
     }
 
     /// Default sizing before explicit styles: stretch on the cross axis when the parent's
@@ -2091,6 +2092,43 @@ fn create_artboard(ed: &mut Editor, a: &Args) -> ToolResult {
     text(v)
 }
 
+/// Place a node `right` / `bottom` away from its parent's far edges.
+fn pin(n: &mut Node, parent_size: (f64, f64), right: Option<f64>, bottom: Option<f64>) {
+    if let Some(r) = right {
+        n.rect.x = parent_size.0 - n.rect.w - r;
+    }
+    if let Some(b) = bottom {
+        n.rect.y = parent_size.1 - n.rect.h - b;
+    }
+}
+
+/// Place right/bottom-anchored nodes again with the sizes the layout settled on. They are out of
+/// the flow, so moving them changes no other size.
+///
+/// Auto layout skips absolute children, so an absolute frame that hugs its content has no size
+/// yet: lay it out first. `anchored` is in build order (children before their parents), so inner
+/// frames settle before the frames that contain them.
+fn pin_anchored(tx: &mut Tx, anchored: &[(NodeId, Option<f64>, Option<f64>)]) {
+    for &(id, right, bottom) in anchored {
+        if tx.doc().get(id).is_some_and(|n| n.layout.is_some()) {
+            for _ in 0..6 {
+                if !crate::layout::layout_frame(tx, id) {
+                    break;
+                }
+            }
+        }
+        let Some(parent) = tx.doc().get(id).and_then(|n| n.parent) else {
+            continue;
+        };
+        let Some(ps) = tx.doc().get(parent).map(|p| (p.rect.w, p.rect.h)) else {
+            continue;
+        };
+        if let Some(n) = tx.node_mut(id) {
+            pin(n, ps, right, bottom);
+        }
+    }
+}
+
 fn write_html(ed: &mut Editor, a: &Args) -> ToolResult {
     let def = page_arg(ed, a)?;
     let src = a.req_str("html")?;
@@ -2150,6 +2188,7 @@ fn write_html(ed: &mut Editor, a: &Args) -> ToolResult {
                 page_id: page_id.clone(),
                 ignored: BTreeSet::new(),
                 warnings: Vec::new(),
+                anchored: Vec::new(),
             };
             let flex = parent.layout.is_some();
             let made = b.nodes(&tree, &inherited, &parent, &mut index, flex);
@@ -2175,6 +2214,7 @@ fn write_html(ed: &mut Editor, a: &Args) -> ToolResult {
                 }
             }
             relayout(b.tx, parent_id.or(made.first().copied()));
+            pin_anchored(b.tx, &b.anchored);
             let (ig, w) = (b.ignored, b.warnings);
             (made, ig, w)
         })
